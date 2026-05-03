@@ -22,7 +22,7 @@ func TestKafkaProvider_Name(t *testing.T) {
 // "not implemented" error — the kafka provider is a registry stub for the pilot.
 func TestKafkaProvider_Stub_ErrorsOnResources(t *testing.T) {
 	p := kafka.New()
-	_, err := p.Resources(eventbusv1.ClusterConfig{}, providers.TargetDigitalOceanManagedKafka)
+	_, err := p.Resources(&eventbusv1.ClusterConfig{}, providers.TargetDigitalOceanManagedKafka)
 	if err == nil {
 		t.Fatal("expected stub error from Resources, got nil")
 	}

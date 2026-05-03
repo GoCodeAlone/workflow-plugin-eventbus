@@ -30,7 +30,7 @@ func New() providers.Provider {
 func (p *provider) Name() string { return "kinesis" }
 
 // Resources implements providers.Provider — stub, always errors.
-func (p *provider) Resources(_ eventbusv1.ClusterConfig, _ providers.DeployTarget) ([]iac.Resource, error) {
+func (p *provider) Resources(_ *eventbusv1.ClusterConfig, _ providers.DeployTarget) ([]iac.Resource, error) {
 	return nil, errNotImplemented
 }
 
@@ -40,7 +40,7 @@ func (p *provider) ConnectionString(_ iac.State, _ string) (string, error) {
 }
 
 // StreamResources implements providers.Provider — stub, always errors.
-func (p *provider) StreamResources(_ []eventbusv1.StreamConfig, _ iac.State) ([]iac.Resource, error) {
+func (p *provider) StreamResources(_ []*eventbusv1.StreamConfig, _ iac.State) ([]iac.Resource, error) {
 	return nil, errNotImplemented
 }
 

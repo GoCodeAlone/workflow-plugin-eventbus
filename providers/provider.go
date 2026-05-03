@@ -43,9 +43,11 @@ type Provider interface {
 
 	// Resources returns the IaC resource declarations required to provision
 	// the event-bus cluster described by cfg on the given deploy target.
+	// cfg is passed as a pointer because proto messages embed sync.Mutex via
+	// protoimpl.MessageState and must not be copied by value.
 	// Returns an error if the provider × target combination is unsupported
 	// or if cfg is invalid for this provider.
-	Resources(cfg eventbusv1.ClusterConfig, target DeployTarget) ([]iac.Resource, error)
+	Resources(cfg *eventbusv1.ClusterConfig, target DeployTarget) ([]iac.Resource, error)
 
 	// ConnectionString derives the broker connection string from provisioned state.
 	// env selects environment-specific outputs (e.g. "prod", "staging").
@@ -53,8 +55,8 @@ type Provider interface {
 
 	// StreamResources returns the IaC resource declarations required to
 	// declare the given streams against an already-provisioned cluster
-	// (represented by state).
-	StreamResources(streams []eventbusv1.StreamConfig, state iac.State) ([]iac.Resource, error)
+	// (represented by state). Streams are pointers for the same reason as cfg.
+	StreamResources(streams []*eventbusv1.StreamConfig, state iac.State) ([]iac.Resource, error)
 
 	// Probe probes the event-bus cluster at uri and returns its health state.
 	Probe(uri string) HealthCheck

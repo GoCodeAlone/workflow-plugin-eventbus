@@ -22,7 +22,7 @@ func TestKinesisProvider_Name(t *testing.T) {
 // "not implemented" error — the kinesis provider is a registry stub for the pilot.
 func TestKinesisProvider_Stub_ErrorsOnResources(t *testing.T) {
 	p := kinesis.New()
-	_, err := p.Resources(eventbusv1.ClusterConfig{}, providers.TargetAWSKinesis)
+	_, err := p.Resources(&eventbusv1.ClusterConfig{}, providers.TargetAWSKinesis)
 	if err == nil {
 		t.Fatal("expected stub error from Resources, got nil")
 	}

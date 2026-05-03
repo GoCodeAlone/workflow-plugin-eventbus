@@ -1,0 +1,35 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+    - "sed -i.bak 's/\"version\": \".*\"/\"version\": \"{{ .Version }}\"/' plugin.json && rm -f plugin.json.bak"
+
+builds:
+  - id: workflow-plugin-eventbus
+    main: ./cmd/workflow-plugin-eventbus
+    binary: workflow-plugin-eventbus
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}"
+    files:
+      - plugin.json
+      - LICENSE
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc

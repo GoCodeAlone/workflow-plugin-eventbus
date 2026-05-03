@@ -1,0 +1,178 @@
+syntax = "proto3";
+package workflow.plugin.eventbus.v1;
+
+option go_package = "github.com/GoCodeAlone/workflow-plugin-eventbus/gen;eventbusv1";
+
+import "google/protobuf/duration.proto";
+
+// ─── cluster / module configs ─────────────────────────────────────────────────
+
+// ClusterConfig is the typed config for infra.eventbus module.
+// provider and deploy_target select the Provider × DeployTarget combination.
+message ClusterConfig {
+  // provider selects the message-broker backend: "nats" | "kafka" | "kinesis".
+  string provider = 1;
+  // deploy_target selects the deployment platform:
+  // "digitalocean.app_platform" | "aws.ecs" | "aws.eks" | "kubernetes".
+  string deploy_target = 2;
+  // version is the broker version to deploy (e.g. "2.10" for NATS).
+  string version = 3;
+  // replicas is the number of broker replicas.
+  int32 replicas = 4;
+  // jetstream holds NATS JetStream-specific configuration; ignored for other providers.
+  JetStreamConfig jetstream = 5;
+  // kafka holds Kafka-specific cluster configuration; ignored for other providers.
+  KafkaConfig kafka = 6;
+  // kinesis holds Kinesis-specific configuration; ignored for other providers.
+  KinesisConfig kinesis = 7;
+  // limits sets compute/storage resource limits for the cluster containers.
+  ResourceLimits limits = 8;
+}
+
+// JetStreamConfig holds NATS JetStream-specific settings.
+message JetStreamConfig {
+  // enabled activates JetStream on the NATS cluster (required for durability).
+  bool enabled = 1;
+  // max_storage_bytes caps total on-disk storage for all streams (0 = unlimited).
+  int64 max_storage_bytes = 2;
+  // max_memory_bytes caps in-memory storage (0 = unlimited).
+  int64 max_memory_bytes = 3;
+  // max_age is the default maximum age for messages across all streams.
+  google.protobuf.Duration max_age = 4;
+}
+
+// KafkaConfig holds Kafka-specific cluster settings.
+message KafkaConfig {
+  // bootstrap_servers is the initial broker address list (comma-separated).
+  // Used when connecting to an existing Kafka cluster rather than provisioning one.
+  string bootstrap_servers = 1;
+  // security_protocol specifies the protocol for client-broker communication:
+  // "PLAINTEXT" | "SSL" | "SASL_PLAINTEXT" | "SASL_SSL".
+  string security_protocol = 2;
+  // sasl_mechanism for SASL authentication: "PLAIN" | "SCRAM-SHA-256" | "SCRAM-SHA-512".
+  string sasl_mechanism = 3;
+  // default_replication_factor for new topics (0 = use broker default).
+  int32 default_replication_factor = 4;
+  // min_insync_replicas is the minimum number of in-sync replicas required for acks.
+  int32 min_insync_replicas = 5;
+}
+
+// KinesisConfig holds AWS Kinesis Data Streams-specific settings.
+message KinesisConfig {
+  // region is the AWS region for the Kinesis stream (e.g. "us-east-1").
+  string region = 1;
+  // shard_count is the initial number of shards (throughput units).
+  int32 shard_count = 2;
+  // retention_period_hours is the message retention window (24–8760 hours).
+  int32 retention_period_hours = 3;
+}
+
+// ResourceLimits constrains compute and storage for cluster containers.
+message ResourceLimits {
+  // cpu is the CPU limit in Kubernetes notation (e.g. "500m", "2").
+  string cpu = 1;
+  // memory is the memory limit (e.g. "512Mi", "2Gi").
+  string memory = 2;
+  // storage is the persistent-volume size (e.g. "10Gi").
+  string storage = 3;
+}
+
+// StreamConfig is the typed config for infra.eventbus.stream module.
+message StreamConfig {
+  // name is the stream name (e.g. "BMW_FULFILLMENT").
+  string name = 1;
+  // subjects lists the NATS subject filter patterns bound to this stream.
+  repeated string subjects = 2;
+  // retention_policy controls message retention: "limits" | "interest" | "workqueue".
+  string retention_policy = 3;
+  // num_replicas is the number of stream replicas within the cluster.
+  int32 num_replicas = 4;
+  // max_bytes caps total on-disk storage for this stream (0 = unlimited).
+  int64 max_bytes = 5;
+  // max_age is the maximum age for messages in this stream.
+  google.protobuf.Duration max_age = 6;
+  // ack_wait is the default acknowledgement deadline for consumers on this stream.
+  google.protobuf.Duration ack_wait = 7;
+}
+
+// ConsumerConfig is the typed config for infra.eventbus.consumer module
+// and trigger.eventbus.subscribe.
+message ConsumerConfig {
+  // name is the durable consumer name.
+  string name = 1;
+  // stream_name is the stream this consumer attaches to.
+  string stream_name = 2;
+  // filter_subject narrows delivery to messages matching this subject pattern.
+  string filter_subject = 3;
+  // deliver_policy controls which messages are delivered on first attach:
+  // "all" | "last" | "new" | "by_start_sequence" | "by_start_time".
+  string deliver_policy = 4;
+  // ack_policy controls how acknowledgements are required:
+  // "explicit" | "none" | "all".
+  string ack_policy = 5;
+  // max_deliver is the maximum number of delivery attempts before NACKing (0 = unlimited).
+  int32 max_deliver = 6;
+}
+
+// ─── step inputs / outputs ────────────────────────────────────────────────────
+
+// PublishRequest is the input for step.eventbus.publish.
+message PublishRequest {
+  // subject is the NATS subject (or Kafka topic) to publish to.
+  string subject = 1;
+  // payload is the raw message bytes.
+  bytes payload = 2;
+  // headers are optional key/value metadata attached to the message.
+  map<string, string> headers = 3;
+  // correlation_id is an opaque identifier for request/reply correlation or tracing.
+  string correlation_id = 4;
+}
+
+// PublishResponse is the output from step.eventbus.publish.
+message PublishResponse {
+  // sequence is the JetStream stream sequence number; empty for non-JetStream brokers.
+  string sequence = 1;
+  // acked_at is the timestamp when the broker acknowledged the message (RFC3339).
+  string acked_at = 2;
+}
+
+// ConsumeRequest is the input for step.eventbus.consume.
+message ConsumeRequest {
+  // consumer is the durable consumer name to pull from.
+  string consumer = 1;
+  // batch_size is the maximum number of messages to return in one call.
+  int32 batch_size = 2;
+  // max_wait is the maximum time to block waiting for messages.
+  google.protobuf.Duration max_wait = 3;
+}
+
+// ConsumeResponse is the output from step.eventbus.consume.
+message ConsumeResponse {
+  // messages contains the delivered messages (up to batch_size).
+  repeated Message messages = 1;
+}
+
+// Message represents a single delivered event-bus message.
+message Message {
+  // subject is the NATS subject (or Kafka topic/partition key) the message was published on.
+  string subject = 1;
+  // payload is the raw message bytes.
+  bytes payload = 2;
+  // headers are key/value metadata attached to the message.
+  map<string, string> headers = 3;
+  // sequence is the stream sequence number assigned by the broker.
+  string sequence = 4;
+  // published_at is the broker-assigned publish timestamp (RFC3339).
+  string published_at = 5;
+  // ack_token is the opaque token used to acknowledge this message via step.eventbus.ack.
+  string ack_token = 6;
+}
+
+// AckRequest is the input for step.eventbus.ack.
+message AckRequest {
+  // ack_token is the opaque acknowledgement token from Message.ack_token.
+  string ack_token = 1;
+}
+
+// AckResponse is the output from step.eventbus.ack.
+message AckResponse {}

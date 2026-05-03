@@ -1,0 +1,51 @@
+{
+    "version": "1",
+    "contracts": [
+        {
+            "kind": "module",
+            "type": "infra.eventbus",
+            "mode": "strict_proto",
+            "config": "workflow.plugin.eventbus.v1.ClusterConfig"
+        },
+        {
+            "kind": "module",
+            "type": "infra.eventbus.stream",
+            "mode": "strict_proto",
+            "config": "workflow.plugin.eventbus.v1.StreamConfig"
+        },
+        {
+            "kind": "module",
+            "type": "infra.eventbus.consumer",
+            "mode": "strict_proto",
+            "config": "workflow.plugin.eventbus.v1.ConsumerConfig"
+        },
+        {
+            "kind": "step",
+            "type": "step.eventbus.publish",
+            "mode": "strict_proto",
+            "input": "workflow.plugin.eventbus.v1.PublishRequest",
+            "output": "workflow.plugin.eventbus.v1.PublishResponse"
+        },
+        {
+            "kind": "step",
+            "type": "step.eventbus.consume",
+            "mode": "strict_proto",
+            "input": "workflow.plugin.eventbus.v1.ConsumeRequest",
+            "output": "workflow.plugin.eventbus.v1.ConsumeResponse"
+        },
+        {
+            "kind": "step",
+            "type": "step.eventbus.ack",
+            "mode": "strict_proto",
+            "input": "workflow.plugin.eventbus.v1.AckRequest",
+            "output": "workflow.plugin.eventbus.v1.AckResponse"
+        },
+        {
+            "kind": "trigger",
+            "type": "trigger.eventbus.subscribe",
+            "mode": "strict_proto",
+            "config": "workflow.plugin.eventbus.v1.ConsumerConfig",
+            "output": "workflow.plugin.eventbus.v1.Message"
+        }
+    ]
+}

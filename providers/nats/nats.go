@@ -13,6 +13,7 @@ package nats
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	eventbusv1 "github.com/GoCodeAlone/workflow-plugin-eventbus/gen"
 	"github.com/GoCodeAlone/workflow-plugin-eventbus/iac"
@@ -50,8 +51,13 @@ func (p *provider) Resources(cfg *eventbusv1.ClusterConfig, target providers.Dep
 	case providers.TargetKubernetes:
 		return resourcesForKubernetes(cfg)
 	default:
-		// TargetSelfHosted and any future targets not yet dispatched.
-		return nil, fmt.Errorf("nats: deploy target %q is not implemented", target)
+		// TargetSelfHosted and any future recognised-but-unimplemented targets.
+		return nil, fmt.Errorf(
+			"nats: deploy target %q is not implemented for the pilot; "+
+				"only %q is active — add a deploy_%s.go stub to activate this target",
+			target, providers.TargetDigitalOceanApp,
+			strings.ReplaceAll(string(target), ".", "_"),
+		)
 	}
 }
 

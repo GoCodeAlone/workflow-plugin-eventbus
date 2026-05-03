@@ -74,3 +74,26 @@ func TestValidateProviderTarget_UnknownProvider(t *testing.T) {
 		t.Error("expected error for unknown provider 'rabbitmq', got nil")
 	}
 }
+
+// TestValidateProviderTarget_EdgeCases covers inputs that callers might pass
+// accidentally: empty string and wrong case.
+func TestValidateProviderTarget_EdgeCases(t *testing.T) {
+	cases := []struct {
+		name     string
+		provider string
+		target   providers.DeployTarget
+	}{
+		{"empty provider", "", providers.TargetDigitalOceanApp},
+		{"uppercase NATS", "NATS", providers.TargetDigitalOceanApp},
+		{"mixed case Kafka", "Kafka", providers.TargetAWSManagedKafka},
+		{"uppercase KINESIS", "KINESIS", providers.TargetAWSKinesis},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := providers.ValidateProviderTarget(tc.provider, tc.target)
+			if err == nil {
+				t.Errorf("expected error for provider %q, got nil", tc.provider)
+			}
+		})
+	}
+}

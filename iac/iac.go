@@ -12,21 +12,38 @@ type Resource struct {
 	Kind string
 	// Name is the resource instance name, unique within the deployment environment.
 	Name string
-	// Labels are metadata key/value pairs attached to the resource (e.g. "env": "prod").
+	// Properties carries resource-type-specific configuration key/value pairs.
+	// Schema per Kind is defined by the downstream IaC plugin that realizes this resource.
+	// Examples: image, replicas, storage_size, port, shard_count.
+	Properties map[string]string
+	// Labels are metadata tags attached to the resource (e.g. "env": "prod", "team": "bmw").
+	// These are not config — they are used for filtering, cost allocation, and observability.
 	Labels map[string]string
 }
 
-// State holds resolved outputs from previously provisioned resources.
-// All values are typed strings (connection strings, ARNs, cluster IDs, etc.).
-// Sensitive outputs (connection strings with credentials) are marked as such
-// by convention: keys ending in "_uri" or "_dsn" are treated as sensitive.
-type State struct {
-	// Outputs maps output key to value, e.g. "uri" → "nats://host:4222".
-	Outputs map[string]string
+// Output is a single state value with explicit sensitivity marking.
+// Sensitive outputs (connection strings, credentials, ARNs with embedded secrets)
+// must be marked Sensitive: true to prevent accidental logging in plan output.
+type Output struct {
+	// Value is the resolved output string.
+	Value string
+	// Sensitive marks outputs that must not appear in plain-text plan/log output.
+	// The workflow engine suppresses sensitive outputs unless --show-sensitive is passed.
+	Sensitive bool
 }
 
-// Output returns the state output for key, and whether it was present.
+// State holds resolved outputs from previously provisioned resources.
+// Each output is explicitly typed and sensitivity-marked.
+type State struct {
+	// Outputs maps output key to a typed, sensitivity-marked Output value.
+	// Example: "uri" → Output{Value: "nats://host:4222", Sensitive: true}
+	Outputs map[string]Output
+}
+
+// Output returns the value for key and whether it was present.
+// The Sensitive flag is not surfaced here — callers that need it should read
+// s.Outputs[key] directly.
 func (s State) Output(key string) (string, bool) {
-	v, ok := s.Outputs[key]
-	return v, ok
+	out, ok := s.Outputs[key]
+	return out.Value, ok
 }

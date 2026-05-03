@@ -5,18 +5,31 @@
 package providers
 
 import (
-	"github.com/GoCodeAlone/workflow-plugin-eventbus/gen"
+	eventbusv1 "github.com/GoCodeAlone/workflow-plugin-eventbus/gen"
 	"github.com/GoCodeAlone/workflow-plugin-eventbus/iac"
 )
 
-// HealthCheck represents the result of a liveness probe against an event-bus URI.
+// HealthStatus is the typed health state returned by Provider.Probe.
+type HealthStatus string
+
+const (
+	// HealthStatusHealthy indicates the broker is reachable and fully operational.
+	HealthStatusHealthy HealthStatus = "healthy"
+	// HealthStatusDegraded indicates the broker is reachable but impaired
+	// (e.g. a replica is down, JetStream is slow).
+	HealthStatusDegraded HealthStatus = "degraded"
+	// HealthStatusUnreachable indicates the broker did not respond within the probe timeout.
+	HealthStatusUnreachable HealthStatus = "unreachable"
+)
+
+// HealthCheck is the result of a liveness probe against an event-bus URI.
 type HealthCheck struct {
 	// URI is the address that was probed.
 	URI string
-	// Status is the health state: "healthy", "degraded", or "unreachable".
-	Status string
-	// Error is non-nil when Status is "degraded" or "unreachable".
-	Error error
+	// Status is the typed health state.
+	Status HealthStatus
+	// Err is non-nil when Status is HealthStatusDegraded or HealthStatusUnreachable.
+	Err error
 }
 
 // Provider is the interface all event-bus provider adapters must implement.
@@ -43,6 +56,6 @@ type Provider interface {
 	// (represented by state).
 	StreamResources(streams []eventbusv1.StreamConfig, state iac.State) ([]iac.Resource, error)
 
-	// HealthCheck probes the event-bus cluster at uri and returns its health state.
-	HealthCheck(uri string) HealthCheck
+	// Probe probes the event-bus cluster at uri and returns its health state.
+	Probe(uri string) HealthCheck
 }

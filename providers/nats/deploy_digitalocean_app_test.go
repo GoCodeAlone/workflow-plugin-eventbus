@@ -193,7 +193,8 @@ func TestDOApp_ClusterPort(t *testing.T) {
 	}
 }
 
-// TestDOApp_Labels asserts provider label is set on the container service.
+// TestDOApp_Labels asserts provider and deploy_target labels are set correctly
+// on the container service, regardless of whether DeployTarget is set in cfg.
 func TestDOApp_Labels(t *testing.T) {
 	p := nats.New()
 	cfg := &eventbusv1.ClusterConfig{Version: "2.10", Replicas: 1}
@@ -207,6 +208,9 @@ func TestDOApp_Labels(t *testing.T) {
 	}
 	if svc.Labels["provider"] != "nats" {
 		t.Errorf("label provider = %q, want %q", svc.Labels["provider"], "nats")
+	}
+	if svc.Labels["deploy_target"] != string(providers.TargetDigitalOceanApp) {
+		t.Errorf("label deploy_target = %q, want %q", svc.Labels["deploy_target"], string(providers.TargetDigitalOceanApp))
 	}
 }
 
@@ -271,6 +275,104 @@ func TestDOApp_JetStreamVolumeStorageSizeProperty(t *testing.T) {
 	}
 	if vol.Properties["storage_size_bytes"] != "53687091200" {
 		t.Errorf("storage_size_bytes = %q, want %q", vol.Properties["storage_size_bytes"], "53687091200")
+	}
+}
+
+// TestDOApp_ClusterFlagAlwaysPresent asserts --cluster appears in run_command
+// for both single-replica and multi-replica deployments (always-on for zero-config
+// scale-up, matching the always-exposed port 6222).
+func TestDOApp_ClusterFlagAlwaysPresent(t *testing.T) {
+	tests := []struct {
+		name     string
+		replicas int32
+	}{
+		{"single-replica", 1},
+		{"multi-replica", 3},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := nats.New()
+			cfg := &eventbusv1.ClusterConfig{Version: "2.10", Replicas: tc.replicas}
+			resources, err := p.Resources(cfg, providers.TargetDigitalOceanApp)
+			if err != nil {
+				t.Fatalf("Resources() error: %v", err)
+			}
+			svc := findResourceByKind(resources, "infra.container_service")
+			if svc == nil {
+				t.Fatal("no infra.container_service resource emitted")
+			}
+			if !strings.Contains(svc.Properties["run_command"], "--cluster") {
+				t.Errorf("run_command %q does not contain --cluster for %s deployment", svc.Properties["run_command"], tc.name)
+			}
+		})
+	}
+}
+
+// TestDOApp_LatestVersionRejected asserts that Version "latest" (and case
+// variants) returns a non-nil error — unpinned tags are not allowed.
+func TestDOApp_LatestVersionRejected(t *testing.T) {
+	variants := []string{"latest", "LATEST", "Latest"}
+	for _, v := range variants {
+		t.Run(v, func(t *testing.T) {
+			p := nats.New()
+			cfg := &eventbusv1.ClusterConfig{Version: v, Replicas: 1}
+			_, err := p.Resources(cfg, providers.TargetDigitalOceanApp)
+			if err == nil {
+				t.Errorf("expected error for Version %q, got nil", v)
+			}
+		})
+	}
+}
+
+// TestDOApp_StorageRefLinksContainerToVolume asserts that when JetStream is
+// enabled the container_service carries a storage_ref property whose value
+// matches the name of the emitted infra.storage resource.
+func TestDOApp_StorageRefLinksContainerToVolume(t *testing.T) {
+	p := nats.New()
+	cfg := &eventbusv1.ClusterConfig{
+		Version:  "2.10",
+		Replicas: 1,
+		Jetstream: &eventbusv1.JetStreamConfig{
+			Enabled:         true,
+			MaxStorageBytes: 10737418240,
+		},
+	}
+	resources, err := p.Resources(cfg, providers.TargetDigitalOceanApp)
+	if err != nil {
+		t.Fatalf("Resources() error: %v", err)
+	}
+	svc := findResourceByKind(resources, "infra.container_service")
+	if svc == nil {
+		t.Fatal("no infra.container_service resource emitted")
+	}
+	vol := findResourceByKind(resources, "infra.storage")
+	if vol == nil {
+		t.Fatal("no infra.storage resource emitted")
+	}
+	storageRef := svc.Properties["storage_ref"]
+	if storageRef == "" {
+		t.Error("infra.container_service missing storage_ref property when JetStream is enabled")
+	}
+	if storageRef != vol.Name {
+		t.Errorf("storage_ref %q does not match infra.storage name %q", storageRef, vol.Name)
+	}
+}
+
+// TestDOApp_StorageRefAbsentWithoutJetStream asserts no storage_ref appears
+// on the container service when JetStream is not enabled.
+func TestDOApp_StorageRefAbsentWithoutJetStream(t *testing.T) {
+	p := nats.New()
+	cfg := &eventbusv1.ClusterConfig{Version: "2.10", Replicas: 1}
+	resources, err := p.Resources(cfg, providers.TargetDigitalOceanApp)
+	if err != nil {
+		t.Fatalf("Resources() error: %v", err)
+	}
+	svc := findResourceByKind(resources, "infra.container_service")
+	if svc == nil {
+		t.Fatal("no infra.container_service resource emitted")
+	}
+	if ref := svc.Properties["storage_ref"]; ref != "" {
+		t.Errorf("storage_ref should be absent when JetStream is disabled, got %q", ref)
 	}
 }
 

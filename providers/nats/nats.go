@@ -4,8 +4,10 @@
 // Activated targets for the BMW pilot:
 //   - digitalocean.app_platform (TargetDigitalOceanApp) — fully implemented.
 //
-// Stub targets (not yet activated, emit ErrNotImplemented):
-//   - aws.ecs, aws.eks, kubernetes — see deploy_*_stub.go stubs added by Task 20.
+// Stub targets (not yet activated, return ErrNotImplemented-style errors):
+//   - aws.ecs      — deploy_aws_ecs.go
+//   - aws.eks      — deploy_aws_eks.go
+//   - kubernetes   — deploy_kubernetes.go
 package nats
 
 import (
@@ -41,8 +43,15 @@ func (p *provider) Resources(cfg *eventbusv1.ClusterConfig, target providers.Dep
 	switch target {
 	case providers.TargetDigitalOceanApp:
 		return resourcesForDOApp(cfg)
+	case providers.TargetAWSECS:
+		return resourcesForAWSECS(cfg)
+	case providers.TargetAWSEKS:
+		return resourcesForAWSEKS(cfg)
+	case providers.TargetKubernetes:
+		return resourcesForKubernetes(cfg)
 	default:
-		return nil, fmt.Errorf("nats: deploy target %q is recognised but not yet implemented", target)
+		// TargetSelfHosted and any future targets not yet dispatched.
+		return nil, fmt.Errorf("nats: deploy target %q is not implemented", target)
 	}
 }
 

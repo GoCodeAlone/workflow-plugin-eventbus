@@ -38,7 +38,7 @@ modules:
     config:
       name: MY_EVENTS
       subjects: ["events.>"]
-      retention_policy: limits
+      retention_policy: RETENTION_POLICY_LIMITS
       max_bytes: 10737418240  # 10 GB
 
   - name: my-consumer
@@ -47,7 +47,7 @@ modules:
       stream_name: MY_EVENTS
       name: my-handler
       filter_subject: "events.>"
-      ack_policy: explicit
+      ack_policy: ACK_POLICY_EXPLICIT
       max_deliver: 5
 ```
 
@@ -72,7 +72,7 @@ my-handler:
       stream_name: MY_EVENTS
       name: my-handler
       filter_subject: "events.>"
-      ack_policy: explicit
+      ack_policy: ACK_POLICY_EXPLICIT
   steps:
     - name: ack
       type: step.eventbus.ack

@@ -62,10 +62,22 @@ func (p *provider) Resources(cfg *eventbusv1.ClusterConfig, target providers.Dep
 }
 
 // ConnectionString implements providers.Provider.
-// It derives the broker connection URI from provisioned state. The state must
-// contain a "uri" output (emitted by the IaC engine after provisioning the
-// infra.container_service resource).
-func (p *provider) ConnectionString(state iac.State, _ string) (string, error) {
+// It derives the broker connection URI from provisioned state.
+//
+// Lookup order:
+//  1. "uri.<env>" — environment-specific override (e.g. "uri.prod").
+//  2. "uri"        — base URI set by the IaC engine after provisioning.
+//
+// For DigitalOcean App Platform the value is typically
+// "nats://nats.internal:4222" (DO's internal service DNS).
+// Returns an error when neither output is present or non-empty.
+func (p *provider) ConnectionString(state iac.State, env string) (string, error) {
+	// Prefer env-scoped key (e.g. "uri.prod") when present and non-empty.
+	if env != "" {
+		if uri, ok := state.Output("uri." + env); ok && uri != "" {
+			return uri, nil
+		}
+	}
 	uri, ok := state.Output("uri")
 	if !ok || uri == "" {
 		return "", errors.New("nats: ConnectionString: 'uri' output not found in state; ensure the cluster has been provisioned")
@@ -74,15 +86,52 @@ func (p *provider) ConnectionString(state iac.State, _ string) (string, error) {
 }
 
 // StreamResources implements providers.Provider.
-// It returns IaC resource declarations for the given JetStream streams.
-// Task 21 provides the full implementation; this stub returns an empty list
-// (acceptable until stream/consumer IaC emission is wired up).
-func (p *provider) StreamResources(streams []*eventbusv1.StreamConfig, _ iac.State) ([]iac.Resource, error) {
+// It returns one nats.stream_create IaC resource for each StreamConfig.
+// These resources are consumed at provisioning time to declare JetStream streams
+// against the already-provisioned NATS cluster.
+//
+// The "server_uri" property is populated from state when available so the
+// downstream realiser knows which server to configure the stream on.
+// Nil entries in streams are silently skipped.
+func (p *provider) StreamResources(streams []*eventbusv1.StreamConfig, state iac.State) ([]iac.Resource, error) {
 	if len(streams) == 0 {
 		return nil, nil
 	}
-	// Full implementation added in Task 21.
-	return nil, fmt.Errorf("nats: StreamResources not yet implemented (Task 21)")
+
+	// Best-effort: derive server URI from state for the stream resources.
+	serverURI, _ := state.Output("uri")
+
+	resources := make([]iac.Resource, 0, len(streams))
+	for _, s := range streams {
+		if s == nil {
+			continue
+		}
+		props := map[string]string{
+			"name":             s.GetName(),
+			"subjects":         strings.Join(s.GetSubjects(), ","),
+			"retention_policy": s.GetRetentionPolicy().String(),
+			"num_replicas":     fmt.Sprintf("%d", s.GetNumReplicas()),
+			"max_bytes":        fmt.Sprintf("%d", s.GetMaxBytes()),
+		}
+		if serverURI != "" {
+			props["server_uri"] = serverURI
+		}
+		if d := s.GetMaxAge(); d != nil && d.IsValid() {
+			props["max_age"] = d.AsDuration().String()
+		}
+		if d := s.GetAckWait(); d != nil && d.IsValid() {
+			props["ack_wait"] = d.AsDuration().String()
+		}
+		resources = append(resources, iac.Resource{
+			Kind:       "nats.stream_create",
+			Name:       s.GetName(),
+			Properties: props,
+			Labels: map[string]string{
+				"provider": "nats",
+			},
+		})
+	}
+	return resources, nil
 }
 
 // Probe implements providers.Provider.

@@ -22,6 +22,291 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// RetentionPolicy controls how messages are retained in a stream.
+type RetentionPolicy int32
+
+const (
+	RetentionPolicy_RETENTION_POLICY_UNSPECIFIED RetentionPolicy = 0
+	// RETENTION_POLICY_LIMITS retains messages up to configured size / age limits.
+	RetentionPolicy_RETENTION_POLICY_LIMITS RetentionPolicy = 1
+	// RETENTION_POLICY_INTEREST retains messages while at least one consumer is active.
+	RetentionPolicy_RETENTION_POLICY_INTEREST RetentionPolicy = 2
+	// RETENTION_POLICY_WORKQUEUE retains messages until they are acknowledged by one consumer.
+	RetentionPolicy_RETENTION_POLICY_WORKQUEUE RetentionPolicy = 3
+)
+
+// Enum value maps for RetentionPolicy.
+var (
+	RetentionPolicy_name = map[int32]string{
+		0: "RETENTION_POLICY_UNSPECIFIED",
+		1: "RETENTION_POLICY_LIMITS",
+		2: "RETENTION_POLICY_INTEREST",
+		3: "RETENTION_POLICY_WORKQUEUE",
+	}
+	RetentionPolicy_value = map[string]int32{
+		"RETENTION_POLICY_UNSPECIFIED": 0,
+		"RETENTION_POLICY_LIMITS":      1,
+		"RETENTION_POLICY_INTEREST":    2,
+		"RETENTION_POLICY_WORKQUEUE":   3,
+	}
+)
+
+func (x RetentionPolicy) Enum() *RetentionPolicy {
+	p := new(RetentionPolicy)
+	*p = x
+	return p
+}
+
+func (x RetentionPolicy) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RetentionPolicy) Descriptor() protoreflect.EnumDescriptor {
+	return file_eventbus_proto_enumTypes[0].Descriptor()
+}
+
+func (RetentionPolicy) Type() protoreflect.EnumType {
+	return &file_eventbus_proto_enumTypes[0]
+}
+
+func (x RetentionPolicy) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RetentionPolicy.Descriptor instead.
+func (RetentionPolicy) EnumDescriptor() ([]byte, []int) {
+	return file_eventbus_proto_rawDescGZIP(), []int{0}
+}
+
+// DeliverPolicy controls which messages a consumer receives on first attach.
+type DeliverPolicy int32
+
+const (
+	DeliverPolicy_DELIVER_POLICY_UNSPECIFIED DeliverPolicy = 0
+	// DELIVER_POLICY_ALL delivers all messages from the beginning of the stream.
+	DeliverPolicy_DELIVER_POLICY_ALL DeliverPolicy = 1
+	// DELIVER_POLICY_LAST delivers only the last message per subject.
+	DeliverPolicy_DELIVER_POLICY_LAST DeliverPolicy = 2
+	// DELIVER_POLICY_NEW delivers only messages published after the consumer is created.
+	DeliverPolicy_DELIVER_POLICY_NEW DeliverPolicy = 3
+	// DELIVER_POLICY_BY_START_SEQUENCE delivers messages starting from a specific sequence.
+	DeliverPolicy_DELIVER_POLICY_BY_START_SEQUENCE DeliverPolicy = 4
+	// DELIVER_POLICY_BY_START_TIME delivers messages starting from a specific time.
+	DeliverPolicy_DELIVER_POLICY_BY_START_TIME DeliverPolicy = 5
+)
+
+// Enum value maps for DeliverPolicy.
+var (
+	DeliverPolicy_name = map[int32]string{
+		0: "DELIVER_POLICY_UNSPECIFIED",
+		1: "DELIVER_POLICY_ALL",
+		2: "DELIVER_POLICY_LAST",
+		3: "DELIVER_POLICY_NEW",
+		4: "DELIVER_POLICY_BY_START_SEQUENCE",
+		5: "DELIVER_POLICY_BY_START_TIME",
+	}
+	DeliverPolicy_value = map[string]int32{
+		"DELIVER_POLICY_UNSPECIFIED":       0,
+		"DELIVER_POLICY_ALL":               1,
+		"DELIVER_POLICY_LAST":              2,
+		"DELIVER_POLICY_NEW":               3,
+		"DELIVER_POLICY_BY_START_SEQUENCE": 4,
+		"DELIVER_POLICY_BY_START_TIME":     5,
+	}
+)
+
+func (x DeliverPolicy) Enum() *DeliverPolicy {
+	p := new(DeliverPolicy)
+	*p = x
+	return p
+}
+
+func (x DeliverPolicy) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (DeliverPolicy) Descriptor() protoreflect.EnumDescriptor {
+	return file_eventbus_proto_enumTypes[1].Descriptor()
+}
+
+func (DeliverPolicy) Type() protoreflect.EnumType {
+	return &file_eventbus_proto_enumTypes[1]
+}
+
+func (x DeliverPolicy) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use DeliverPolicy.Descriptor instead.
+func (DeliverPolicy) EnumDescriptor() ([]byte, []int) {
+	return file_eventbus_proto_rawDescGZIP(), []int{1}
+}
+
+// AckPolicy controls how consumers must acknowledge messages.
+type AckPolicy int32
+
+const (
+	AckPolicy_ACK_POLICY_UNSPECIFIED AckPolicy = 0
+	// ACK_POLICY_EXPLICIT requires explicit per-message acknowledgement (recommended).
+	AckPolicy_ACK_POLICY_EXPLICIT AckPolicy = 1
+	// ACK_POLICY_NONE disables acknowledgements entirely (fire-and-forget).
+	AckPolicy_ACK_POLICY_NONE AckPolicy = 2
+	// ACK_POLICY_ALL acknowledges all messages up to and including the specified sequence.
+	AckPolicy_ACK_POLICY_ALL AckPolicy = 3
+)
+
+// Enum value maps for AckPolicy.
+var (
+	AckPolicy_name = map[int32]string{
+		0: "ACK_POLICY_UNSPECIFIED",
+		1: "ACK_POLICY_EXPLICIT",
+		2: "ACK_POLICY_NONE",
+		3: "ACK_POLICY_ALL",
+	}
+	AckPolicy_value = map[string]int32{
+		"ACK_POLICY_UNSPECIFIED": 0,
+		"ACK_POLICY_EXPLICIT":    1,
+		"ACK_POLICY_NONE":        2,
+		"ACK_POLICY_ALL":         3,
+	}
+)
+
+func (x AckPolicy) Enum() *AckPolicy {
+	p := new(AckPolicy)
+	*p = x
+	return p
+}
+
+func (x AckPolicy) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (AckPolicy) Descriptor() protoreflect.EnumDescriptor {
+	return file_eventbus_proto_enumTypes[2].Descriptor()
+}
+
+func (AckPolicy) Type() protoreflect.EnumType {
+	return &file_eventbus_proto_enumTypes[2]
+}
+
+func (x AckPolicy) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use AckPolicy.Descriptor instead.
+func (AckPolicy) EnumDescriptor() ([]byte, []int) {
+	return file_eventbus_proto_rawDescGZIP(), []int{2}
+}
+
+// KafkaSecurityProtocol selects the client-broker transport security mode.
+type KafkaSecurityProtocol int32
+
+const (
+	KafkaSecurityProtocol_KAFKA_SECURITY_PROTOCOL_UNSPECIFIED    KafkaSecurityProtocol = 0
+	KafkaSecurityProtocol_KAFKA_SECURITY_PROTOCOL_PLAINTEXT      KafkaSecurityProtocol = 1
+	KafkaSecurityProtocol_KAFKA_SECURITY_PROTOCOL_SSL            KafkaSecurityProtocol = 2
+	KafkaSecurityProtocol_KAFKA_SECURITY_PROTOCOL_SASL_PLAINTEXT KafkaSecurityProtocol = 3
+	KafkaSecurityProtocol_KAFKA_SECURITY_PROTOCOL_SASL_SSL       KafkaSecurityProtocol = 4
+)
+
+// Enum value maps for KafkaSecurityProtocol.
+var (
+	KafkaSecurityProtocol_name = map[int32]string{
+		0: "KAFKA_SECURITY_PROTOCOL_UNSPECIFIED",
+		1: "KAFKA_SECURITY_PROTOCOL_PLAINTEXT",
+		2: "KAFKA_SECURITY_PROTOCOL_SSL",
+		3: "KAFKA_SECURITY_PROTOCOL_SASL_PLAINTEXT",
+		4: "KAFKA_SECURITY_PROTOCOL_SASL_SSL",
+	}
+	KafkaSecurityProtocol_value = map[string]int32{
+		"KAFKA_SECURITY_PROTOCOL_UNSPECIFIED":    0,
+		"KAFKA_SECURITY_PROTOCOL_PLAINTEXT":      1,
+		"KAFKA_SECURITY_PROTOCOL_SSL":            2,
+		"KAFKA_SECURITY_PROTOCOL_SASL_PLAINTEXT": 3,
+		"KAFKA_SECURITY_PROTOCOL_SASL_SSL":       4,
+	}
+)
+
+func (x KafkaSecurityProtocol) Enum() *KafkaSecurityProtocol {
+	p := new(KafkaSecurityProtocol)
+	*p = x
+	return p
+}
+
+func (x KafkaSecurityProtocol) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (KafkaSecurityProtocol) Descriptor() protoreflect.EnumDescriptor {
+	return file_eventbus_proto_enumTypes[3].Descriptor()
+}
+
+func (KafkaSecurityProtocol) Type() protoreflect.EnumType {
+	return &file_eventbus_proto_enumTypes[3]
+}
+
+func (x KafkaSecurityProtocol) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use KafkaSecurityProtocol.Descriptor instead.
+func (KafkaSecurityProtocol) EnumDescriptor() ([]byte, []int) {
+	return file_eventbus_proto_rawDescGZIP(), []int{3}
+}
+
+// KafkaSaslMechanism selects the SASL authentication mechanism.
+type KafkaSaslMechanism int32
+
+const (
+	KafkaSaslMechanism_KAFKA_SASL_MECHANISM_UNSPECIFIED   KafkaSaslMechanism = 0
+	KafkaSaslMechanism_KAFKA_SASL_MECHANISM_PLAIN         KafkaSaslMechanism = 1
+	KafkaSaslMechanism_KAFKA_SASL_MECHANISM_SCRAM_SHA_256 KafkaSaslMechanism = 2
+	KafkaSaslMechanism_KAFKA_SASL_MECHANISM_SCRAM_SHA_512 KafkaSaslMechanism = 3
+)
+
+// Enum value maps for KafkaSaslMechanism.
+var (
+	KafkaSaslMechanism_name = map[int32]string{
+		0: "KAFKA_SASL_MECHANISM_UNSPECIFIED",
+		1: "KAFKA_SASL_MECHANISM_PLAIN",
+		2: "KAFKA_SASL_MECHANISM_SCRAM_SHA_256",
+		3: "KAFKA_SASL_MECHANISM_SCRAM_SHA_512",
+	}
+	KafkaSaslMechanism_value = map[string]int32{
+		"KAFKA_SASL_MECHANISM_UNSPECIFIED":   0,
+		"KAFKA_SASL_MECHANISM_PLAIN":         1,
+		"KAFKA_SASL_MECHANISM_SCRAM_SHA_256": 2,
+		"KAFKA_SASL_MECHANISM_SCRAM_SHA_512": 3,
+	}
+)
+
+func (x KafkaSaslMechanism) Enum() *KafkaSaslMechanism {
+	p := new(KafkaSaslMechanism)
+	*p = x
+	return p
+}
+
+func (x KafkaSaslMechanism) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (KafkaSaslMechanism) Descriptor() protoreflect.EnumDescriptor {
+	return file_eventbus_proto_enumTypes[4].Descriptor()
+}
+
+func (KafkaSaslMechanism) Type() protoreflect.EnumType {
+	return &file_eventbus_proto_enumTypes[4]
+}
+
+func (x KafkaSaslMechanism) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use KafkaSaslMechanism.Descriptor instead.
+func (KafkaSaslMechanism) EnumDescriptor() ([]byte, []int) {
+	return file_eventbus_proto_rawDescGZIP(), []int{4}
+}
+
 // ClusterConfig is the typed config for infra.eventbus module.
 // provider and deploy_target select the Provider × DeployTarget combination.
 type ClusterConfig struct {
@@ -29,7 +314,7 @@ type ClusterConfig struct {
 	// provider selects the message-broker backend: "nats" | "kafka" | "kinesis".
 	Provider string `protobuf:"bytes,1,opt,name=provider,proto3" json:"provider,omitempty"`
 	// deploy_target selects the deployment platform:
-	// "digitalocean.app_platform" | "aws.ecs" | "aws.eks" | "kubernetes".
+	// "digitalocean.app_platform" | "aws.ecs" | "aws.eks" | "kubernetes" | etc.
 	DeployTarget string `protobuf:"bytes,2,opt,name=deploy_target,json=deployTarget,proto3" json:"deploy_target,omitempty"`
 	// version is the broker version to deploy (e.g. "2.10" for NATS).
 	Version string `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
@@ -212,11 +497,10 @@ type KafkaConfig struct {
 	// bootstrap_servers is the initial broker address list (comma-separated).
 	// Used when connecting to an existing Kafka cluster rather than provisioning one.
 	BootstrapServers string `protobuf:"bytes,1,opt,name=bootstrap_servers,json=bootstrapServers,proto3" json:"bootstrap_servers,omitempty"`
-	// security_protocol specifies the protocol for client-broker communication:
-	// "PLAINTEXT" | "SSL" | "SASL_PLAINTEXT" | "SASL_SSL".
-	SecurityProtocol string `protobuf:"bytes,2,opt,name=security_protocol,json=securityProtocol,proto3" json:"security_protocol,omitempty"`
-	// sasl_mechanism for SASL authentication: "PLAIN" | "SCRAM-SHA-256" | "SCRAM-SHA-512".
-	SaslMechanism string `protobuf:"bytes,3,opt,name=sasl_mechanism,json=saslMechanism,proto3" json:"sasl_mechanism,omitempty"`
+	// security_protocol specifies the protocol for client-broker communication.
+	SecurityProtocol KafkaSecurityProtocol `protobuf:"varint,2,opt,name=security_protocol,json=securityProtocol,proto3,enum=workflow.plugin.eventbus.v1.KafkaSecurityProtocol" json:"security_protocol,omitempty"`
+	// sasl_mechanism for SASL authentication.
+	SaslMechanism KafkaSaslMechanism `protobuf:"varint,3,opt,name=sasl_mechanism,json=saslMechanism,proto3,enum=workflow.plugin.eventbus.v1.KafkaSaslMechanism" json:"sasl_mechanism,omitempty"`
 	// default_replication_factor for new topics (0 = use broker default).
 	DefaultReplicationFactor int32 `protobuf:"varint,4,opt,name=default_replication_factor,json=defaultReplicationFactor,proto3" json:"default_replication_factor,omitempty"`
 	// min_insync_replicas is the minimum number of in-sync replicas required for acks.
@@ -262,18 +546,18 @@ func (x *KafkaConfig) GetBootstrapServers() string {
 	return ""
 }
 
-func (x *KafkaConfig) GetSecurityProtocol() string {
+func (x *KafkaConfig) GetSecurityProtocol() KafkaSecurityProtocol {
 	if x != nil {
 		return x.SecurityProtocol
 	}
-	return ""
+	return KafkaSecurityProtocol_KAFKA_SECURITY_PROTOCOL_UNSPECIFIED
 }
 
-func (x *KafkaConfig) GetSaslMechanism() string {
+func (x *KafkaConfig) GetSaslMechanism() KafkaSaslMechanism {
 	if x != nil {
 		return x.SaslMechanism
 	}
-	return ""
+	return KafkaSaslMechanism_KAFKA_SASL_MECHANISM_UNSPECIFIED
 }
 
 func (x *KafkaConfig) GetDefaultReplicationFactor() int32 {
@@ -425,8 +709,8 @@ type StreamConfig struct {
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// subjects lists the NATS subject filter patterns bound to this stream.
 	Subjects []string `protobuf:"bytes,2,rep,name=subjects,proto3" json:"subjects,omitempty"`
-	// retention_policy controls message retention: "limits" | "interest" | "workqueue".
-	RetentionPolicy string `protobuf:"bytes,3,opt,name=retention_policy,json=retentionPolicy,proto3" json:"retention_policy,omitempty"`
+	// retention_policy controls message retention semantics.
+	RetentionPolicy RetentionPolicy `protobuf:"varint,3,opt,name=retention_policy,json=retentionPolicy,proto3,enum=workflow.plugin.eventbus.v1.RetentionPolicy" json:"retention_policy,omitempty"`
 	// num_replicas is the number of stream replicas within the cluster.
 	NumReplicas int32 `protobuf:"varint,4,opt,name=num_replicas,json=numReplicas,proto3" json:"num_replicas,omitempty"`
 	// max_bytes caps total on-disk storage for this stream (0 = unlimited).
@@ -483,11 +767,11 @@ func (x *StreamConfig) GetSubjects() []string {
 	return nil
 }
 
-func (x *StreamConfig) GetRetentionPolicy() string {
+func (x *StreamConfig) GetRetentionPolicy() RetentionPolicy {
 	if x != nil {
 		return x.RetentionPolicy
 	}
-	return ""
+	return RetentionPolicy_RETENTION_POLICY_UNSPECIFIED
 }
 
 func (x *StreamConfig) GetNumReplicas() int32 {
@@ -528,12 +812,10 @@ type ConsumerConfig struct {
 	StreamName string `protobuf:"bytes,2,opt,name=stream_name,json=streamName,proto3" json:"stream_name,omitempty"`
 	// filter_subject narrows delivery to messages matching this subject pattern.
 	FilterSubject string `protobuf:"bytes,3,opt,name=filter_subject,json=filterSubject,proto3" json:"filter_subject,omitempty"`
-	// deliver_policy controls which messages are delivered on first attach:
-	// "all" | "last" | "new" | "by_start_sequence" | "by_start_time".
-	DeliverPolicy string `protobuf:"bytes,4,opt,name=deliver_policy,json=deliverPolicy,proto3" json:"deliver_policy,omitempty"`
-	// ack_policy controls how acknowledgements are required:
-	// "explicit" | "none" | "all".
-	AckPolicy string `protobuf:"bytes,5,opt,name=ack_policy,json=ackPolicy,proto3" json:"ack_policy,omitempty"`
+	// deliver_policy controls which messages are delivered on first attach.
+	DeliverPolicy DeliverPolicy `protobuf:"varint,4,opt,name=deliver_policy,json=deliverPolicy,proto3,enum=workflow.plugin.eventbus.v1.DeliverPolicy" json:"deliver_policy,omitempty"`
+	// ack_policy controls how acknowledgements are required.
+	AckPolicy AckPolicy `protobuf:"varint,5,opt,name=ack_policy,json=ackPolicy,proto3,enum=workflow.plugin.eventbus.v1.AckPolicy" json:"ack_policy,omitempty"`
 	// max_deliver is the maximum number of delivery attempts before NACKing (0 = unlimited).
 	MaxDeliver    int32 `protobuf:"varint,6,opt,name=max_deliver,json=maxDeliver,proto3" json:"max_deliver,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -591,18 +873,18 @@ func (x *ConsumerConfig) GetFilterSubject() string {
 	return ""
 }
 
-func (x *ConsumerConfig) GetDeliverPolicy() string {
+func (x *ConsumerConfig) GetDeliverPolicy() DeliverPolicy {
 	if x != nil {
 		return x.DeliverPolicy
 	}
-	return ""
+	return DeliverPolicy_DELIVER_POLICY_UNSPECIFIED
 }
 
-func (x *ConsumerConfig) GetAckPolicy() string {
+func (x *ConsumerConfig) GetAckPolicy() AckPolicy {
 	if x != nil {
 		return x.AckPolicy
 	}
-	return ""
+	return AckPolicy_ACK_POLICY_UNSPECIFIED
 }
 
 func (x *ConsumerConfig) GetMaxDeliver() int32 {
@@ -1042,11 +1324,11 @@ const file_eventbus_proto_rawDesc = "" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12*\n" +
 	"\x11max_storage_bytes\x18\x02 \x01(\x03R\x0fmaxStorageBytes\x12(\n" +
 	"\x10max_memory_bytes\x18\x03 \x01(\x03R\x0emaxMemoryBytes\x122\n" +
-	"\amax_age\x18\x04 \x01(\v2\x19.google.protobuf.DurationR\x06maxAge\"\xfc\x01\n" +
+	"\amax_age\x18\x04 \x01(\v2\x19.google.protobuf.DurationR\x06maxAge\"\xe1\x02\n" +
 	"\vKafkaConfig\x12+\n" +
-	"\x11bootstrap_servers\x18\x01 \x01(\tR\x10bootstrapServers\x12+\n" +
-	"\x11security_protocol\x18\x02 \x01(\tR\x10securityProtocol\x12%\n" +
-	"\x0esasl_mechanism\x18\x03 \x01(\tR\rsaslMechanism\x12<\n" +
+	"\x11bootstrap_servers\x18\x01 \x01(\tR\x10bootstrapServers\x12_\n" +
+	"\x11security_protocol\x18\x02 \x01(\x0e22.workflow.plugin.eventbus.v1.KafkaSecurityProtocolR\x10securityProtocol\x12V\n" +
+	"\x0esasl_mechanism\x18\x03 \x01(\x0e2/.workflow.plugin.eventbus.v1.KafkaSaslMechanismR\rsaslMechanism\x12<\n" +
 	"\x1adefault_replication_factor\x18\x04 \x01(\x05R\x18defaultReplicationFactor\x12.\n" +
 	"\x13min_insync_replicas\x18\x05 \x01(\x05R\x11minInsyncReplicas\"~\n" +
 	"\rKinesisConfig\x12\x16\n" +
@@ -1057,23 +1339,23 @@ const file_eventbus_proto_rawDesc = "" +
 	"\x0eResourceLimits\x12\x10\n" +
 	"\x03cpu\x18\x01 \x01(\tR\x03cpu\x12\x16\n" +
 	"\x06memory\x18\x02 \x01(\tR\x06memory\x12\x18\n" +
-	"\astorage\x18\x03 \x01(\tR\astorage\"\x93\x02\n" +
+	"\astorage\x18\x03 \x01(\tR\astorage\"\xc1\x02\n" +
 	"\fStreamConfig\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1a\n" +
-	"\bsubjects\x18\x02 \x03(\tR\bsubjects\x12)\n" +
-	"\x10retention_policy\x18\x03 \x01(\tR\x0fretentionPolicy\x12!\n" +
+	"\bsubjects\x18\x02 \x03(\tR\bsubjects\x12W\n" +
+	"\x10retention_policy\x18\x03 \x01(\x0e2,.workflow.plugin.eventbus.v1.RetentionPolicyR\x0fretentionPolicy\x12!\n" +
 	"\fnum_replicas\x18\x04 \x01(\x05R\vnumReplicas\x12\x1b\n" +
 	"\tmax_bytes\x18\x05 \x01(\x03R\bmaxBytes\x122\n" +
 	"\amax_age\x18\x06 \x01(\v2\x19.google.protobuf.DurationR\x06maxAge\x124\n" +
-	"\back_wait\x18\a \x01(\v2\x19.google.protobuf.DurationR\aackWait\"\xd3\x01\n" +
+	"\back_wait\x18\a \x01(\v2\x19.google.protobuf.DurationR\aackWait\"\xa7\x02\n" +
 	"\x0eConsumerConfig\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1f\n" +
 	"\vstream_name\x18\x02 \x01(\tR\n" +
 	"streamName\x12%\n" +
-	"\x0efilter_subject\x18\x03 \x01(\tR\rfilterSubject\x12%\n" +
-	"\x0edeliver_policy\x18\x04 \x01(\tR\rdeliverPolicy\x12\x1d\n" +
+	"\x0efilter_subject\x18\x03 \x01(\tR\rfilterSubject\x12Q\n" +
+	"\x0edeliver_policy\x18\x04 \x01(\x0e2*.workflow.plugin.eventbus.v1.DeliverPolicyR\rdeliverPolicy\x12E\n" +
 	"\n" +
-	"ack_policy\x18\x05 \x01(\tR\tackPolicy\x12\x1f\n" +
+	"ack_policy\x18\x05 \x01(\x0e2&.workflow.plugin.eventbus.v1.AckPolicyR\tackPolicy\x12\x1f\n" +
 	"\vmax_deliver\x18\x06 \x01(\x05R\n" +
 	"maxDeliver\"\xfb\x01\n" +
 	"\x0ePublishRequest\x12\x18\n" +
@@ -1107,7 +1389,35 @@ const file_eventbus_proto_rawDesc = "" +
 	"\n" +
 	"AckRequest\x12\x1b\n" +
 	"\tack_token\x18\x01 \x01(\tR\backToken\"\r\n" +
-	"\vAckResponseB@Z>github.com/GoCodeAlone/workflow-plugin-eventbus/gen;eventbusv1b\x06proto3"
+	"\vAckResponse*\x8f\x01\n" +
+	"\x0fRetentionPolicy\x12 \n" +
+	"\x1cRETENTION_POLICY_UNSPECIFIED\x10\x00\x12\x1b\n" +
+	"\x17RETENTION_POLICY_LIMITS\x10\x01\x12\x1d\n" +
+	"\x19RETENTION_POLICY_INTEREST\x10\x02\x12\x1e\n" +
+	"\x1aRETENTION_POLICY_WORKQUEUE\x10\x03*\xc0\x01\n" +
+	"\rDeliverPolicy\x12\x1e\n" +
+	"\x1aDELIVER_POLICY_UNSPECIFIED\x10\x00\x12\x16\n" +
+	"\x12DELIVER_POLICY_ALL\x10\x01\x12\x17\n" +
+	"\x13DELIVER_POLICY_LAST\x10\x02\x12\x16\n" +
+	"\x12DELIVER_POLICY_NEW\x10\x03\x12$\n" +
+	" DELIVER_POLICY_BY_START_SEQUENCE\x10\x04\x12 \n" +
+	"\x1cDELIVER_POLICY_BY_START_TIME\x10\x05*i\n" +
+	"\tAckPolicy\x12\x1a\n" +
+	"\x16ACK_POLICY_UNSPECIFIED\x10\x00\x12\x17\n" +
+	"\x13ACK_POLICY_EXPLICIT\x10\x01\x12\x13\n" +
+	"\x0fACK_POLICY_NONE\x10\x02\x12\x12\n" +
+	"\x0eACK_POLICY_ALL\x10\x03*\xda\x01\n" +
+	"\x15KafkaSecurityProtocol\x12'\n" +
+	"#KAFKA_SECURITY_PROTOCOL_UNSPECIFIED\x10\x00\x12%\n" +
+	"!KAFKA_SECURITY_PROTOCOL_PLAINTEXT\x10\x01\x12\x1f\n" +
+	"\x1bKAFKA_SECURITY_PROTOCOL_SSL\x10\x02\x12*\n" +
+	"&KAFKA_SECURITY_PROTOCOL_SASL_PLAINTEXT\x10\x03\x12$\n" +
+	" KAFKA_SECURITY_PROTOCOL_SASL_SSL\x10\x04*\xaa\x01\n" +
+	"\x12KafkaSaslMechanism\x12$\n" +
+	" KAFKA_SASL_MECHANISM_UNSPECIFIED\x10\x00\x12\x1e\n" +
+	"\x1aKAFKA_SASL_MECHANISM_PLAIN\x10\x01\x12&\n" +
+	"\"KAFKA_SASL_MECHANISM_SCRAM_SHA_256\x10\x02\x12&\n" +
+	"\"KAFKA_SASL_MECHANISM_SCRAM_SHA_512\x10\x03B@Z>github.com/GoCodeAlone/workflow-plugin-eventbus/gen;eventbusv1b\x06proto3"
 
 var (
 	file_eventbus_proto_rawDescOnce sync.Once
@@ -1121,43 +1431,54 @@ func file_eventbus_proto_rawDescGZIP() []byte {
 	return file_eventbus_proto_rawDescData
 }
 
+var file_eventbus_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
 var file_eventbus_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
 var file_eventbus_proto_goTypes = []any{
-	(*ClusterConfig)(nil),       // 0: workflow.plugin.eventbus.v1.ClusterConfig
-	(*JetStreamConfig)(nil),     // 1: workflow.plugin.eventbus.v1.JetStreamConfig
-	(*KafkaConfig)(nil),         // 2: workflow.plugin.eventbus.v1.KafkaConfig
-	(*KinesisConfig)(nil),       // 3: workflow.plugin.eventbus.v1.KinesisConfig
-	(*ResourceLimits)(nil),      // 4: workflow.plugin.eventbus.v1.ResourceLimits
-	(*StreamConfig)(nil),        // 5: workflow.plugin.eventbus.v1.StreamConfig
-	(*ConsumerConfig)(nil),      // 6: workflow.plugin.eventbus.v1.ConsumerConfig
-	(*PublishRequest)(nil),      // 7: workflow.plugin.eventbus.v1.PublishRequest
-	(*PublishResponse)(nil),     // 8: workflow.plugin.eventbus.v1.PublishResponse
-	(*ConsumeRequest)(nil),      // 9: workflow.plugin.eventbus.v1.ConsumeRequest
-	(*ConsumeResponse)(nil),     // 10: workflow.plugin.eventbus.v1.ConsumeResponse
-	(*Message)(nil),             // 11: workflow.plugin.eventbus.v1.Message
-	(*AckRequest)(nil),          // 12: workflow.plugin.eventbus.v1.AckRequest
-	(*AckResponse)(nil),         // 13: workflow.plugin.eventbus.v1.AckResponse
-	nil,                         // 14: workflow.plugin.eventbus.v1.PublishRequest.HeadersEntry
-	nil,                         // 15: workflow.plugin.eventbus.v1.Message.HeadersEntry
-	(*durationpb.Duration)(nil), // 16: google.protobuf.Duration
+	(RetentionPolicy)(0),        // 0: workflow.plugin.eventbus.v1.RetentionPolicy
+	(DeliverPolicy)(0),          // 1: workflow.plugin.eventbus.v1.DeliverPolicy
+	(AckPolicy)(0),              // 2: workflow.plugin.eventbus.v1.AckPolicy
+	(KafkaSecurityProtocol)(0),  // 3: workflow.plugin.eventbus.v1.KafkaSecurityProtocol
+	(KafkaSaslMechanism)(0),     // 4: workflow.plugin.eventbus.v1.KafkaSaslMechanism
+	(*ClusterConfig)(nil),       // 5: workflow.plugin.eventbus.v1.ClusterConfig
+	(*JetStreamConfig)(nil),     // 6: workflow.plugin.eventbus.v1.JetStreamConfig
+	(*KafkaConfig)(nil),         // 7: workflow.plugin.eventbus.v1.KafkaConfig
+	(*KinesisConfig)(nil),       // 8: workflow.plugin.eventbus.v1.KinesisConfig
+	(*ResourceLimits)(nil),      // 9: workflow.plugin.eventbus.v1.ResourceLimits
+	(*StreamConfig)(nil),        // 10: workflow.plugin.eventbus.v1.StreamConfig
+	(*ConsumerConfig)(nil),      // 11: workflow.plugin.eventbus.v1.ConsumerConfig
+	(*PublishRequest)(nil),      // 12: workflow.plugin.eventbus.v1.PublishRequest
+	(*PublishResponse)(nil),     // 13: workflow.plugin.eventbus.v1.PublishResponse
+	(*ConsumeRequest)(nil),      // 14: workflow.plugin.eventbus.v1.ConsumeRequest
+	(*ConsumeResponse)(nil),     // 15: workflow.plugin.eventbus.v1.ConsumeResponse
+	(*Message)(nil),             // 16: workflow.plugin.eventbus.v1.Message
+	(*AckRequest)(nil),          // 17: workflow.plugin.eventbus.v1.AckRequest
+	(*AckResponse)(nil),         // 18: workflow.plugin.eventbus.v1.AckResponse
+	nil,                         // 19: workflow.plugin.eventbus.v1.PublishRequest.HeadersEntry
+	nil,                         // 20: workflow.plugin.eventbus.v1.Message.HeadersEntry
+	(*durationpb.Duration)(nil), // 21: google.protobuf.Duration
 }
 var file_eventbus_proto_depIdxs = []int32{
-	1,  // 0: workflow.plugin.eventbus.v1.ClusterConfig.jetstream:type_name -> workflow.plugin.eventbus.v1.JetStreamConfig
-	2,  // 1: workflow.plugin.eventbus.v1.ClusterConfig.kafka:type_name -> workflow.plugin.eventbus.v1.KafkaConfig
-	3,  // 2: workflow.plugin.eventbus.v1.ClusterConfig.kinesis:type_name -> workflow.plugin.eventbus.v1.KinesisConfig
-	4,  // 3: workflow.plugin.eventbus.v1.ClusterConfig.limits:type_name -> workflow.plugin.eventbus.v1.ResourceLimits
-	16, // 4: workflow.plugin.eventbus.v1.JetStreamConfig.max_age:type_name -> google.protobuf.Duration
-	16, // 5: workflow.plugin.eventbus.v1.StreamConfig.max_age:type_name -> google.protobuf.Duration
-	16, // 6: workflow.plugin.eventbus.v1.StreamConfig.ack_wait:type_name -> google.protobuf.Duration
-	14, // 7: workflow.plugin.eventbus.v1.PublishRequest.headers:type_name -> workflow.plugin.eventbus.v1.PublishRequest.HeadersEntry
-	16, // 8: workflow.plugin.eventbus.v1.ConsumeRequest.max_wait:type_name -> google.protobuf.Duration
-	11, // 9: workflow.plugin.eventbus.v1.ConsumeResponse.messages:type_name -> workflow.plugin.eventbus.v1.Message
-	15, // 10: workflow.plugin.eventbus.v1.Message.headers:type_name -> workflow.plugin.eventbus.v1.Message.HeadersEntry
-	11, // [11:11] is the sub-list for method output_type
-	11, // [11:11] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	6,  // 0: workflow.plugin.eventbus.v1.ClusterConfig.jetstream:type_name -> workflow.plugin.eventbus.v1.JetStreamConfig
+	7,  // 1: workflow.plugin.eventbus.v1.ClusterConfig.kafka:type_name -> workflow.plugin.eventbus.v1.KafkaConfig
+	8,  // 2: workflow.plugin.eventbus.v1.ClusterConfig.kinesis:type_name -> workflow.plugin.eventbus.v1.KinesisConfig
+	9,  // 3: workflow.plugin.eventbus.v1.ClusterConfig.limits:type_name -> workflow.plugin.eventbus.v1.ResourceLimits
+	21, // 4: workflow.plugin.eventbus.v1.JetStreamConfig.max_age:type_name -> google.protobuf.Duration
+	3,  // 5: workflow.plugin.eventbus.v1.KafkaConfig.security_protocol:type_name -> workflow.plugin.eventbus.v1.KafkaSecurityProtocol
+	4,  // 6: workflow.plugin.eventbus.v1.KafkaConfig.sasl_mechanism:type_name -> workflow.plugin.eventbus.v1.KafkaSaslMechanism
+	0,  // 7: workflow.plugin.eventbus.v1.StreamConfig.retention_policy:type_name -> workflow.plugin.eventbus.v1.RetentionPolicy
+	21, // 8: workflow.plugin.eventbus.v1.StreamConfig.max_age:type_name -> google.protobuf.Duration
+	21, // 9: workflow.plugin.eventbus.v1.StreamConfig.ack_wait:type_name -> google.protobuf.Duration
+	1,  // 10: workflow.plugin.eventbus.v1.ConsumerConfig.deliver_policy:type_name -> workflow.plugin.eventbus.v1.DeliverPolicy
+	2,  // 11: workflow.plugin.eventbus.v1.ConsumerConfig.ack_policy:type_name -> workflow.plugin.eventbus.v1.AckPolicy
+	19, // 12: workflow.plugin.eventbus.v1.PublishRequest.headers:type_name -> workflow.plugin.eventbus.v1.PublishRequest.HeadersEntry
+	21, // 13: workflow.plugin.eventbus.v1.ConsumeRequest.max_wait:type_name -> google.protobuf.Duration
+	16, // 14: workflow.plugin.eventbus.v1.ConsumeResponse.messages:type_name -> workflow.plugin.eventbus.v1.Message
+	20, // 15: workflow.plugin.eventbus.v1.Message.headers:type_name -> workflow.plugin.eventbus.v1.Message.HeadersEntry
+	16, // [16:16] is the sub-list for method output_type
+	16, // [16:16] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_eventbus_proto_init() }
@@ -1170,13 +1491,14 @@ func file_eventbus_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_eventbus_proto_rawDesc), len(file_eventbus_proto_rawDesc)),
-			NumEnums:      0,
+			NumEnums:      5,
 			NumMessages:   16,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_eventbus_proto_goTypes,
 		DependencyIndexes: file_eventbus_proto_depIdxs,
+		EnumInfos:         file_eventbus_proto_enumTypes,
 		MessageInfos:      file_eventbus_proto_msgTypes,
 	}.Build()
 	File_eventbus_proto = out.File

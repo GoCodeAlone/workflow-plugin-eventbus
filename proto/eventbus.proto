@@ -5,6 +5,62 @@ option go_package = "github.com/GoCodeAlone/workflow-plugin-eventbus/gen;eventbu
 
 import "google/protobuf/duration.proto";
 
+// ─── enums ────────────────────────────────────────────────────────────────────
+
+// RetentionPolicy controls how messages are retained in a stream.
+enum RetentionPolicy {
+  RETENTION_POLICY_UNSPECIFIED = 0;
+  // RETENTION_POLICY_LIMITS retains messages up to configured size / age limits.
+  RETENTION_POLICY_LIMITS = 1;
+  // RETENTION_POLICY_INTEREST retains messages while at least one consumer is active.
+  RETENTION_POLICY_INTEREST = 2;
+  // RETENTION_POLICY_WORKQUEUE retains messages until they are acknowledged by one consumer.
+  RETENTION_POLICY_WORKQUEUE = 3;
+}
+
+// DeliverPolicy controls which messages a consumer receives on first attach.
+enum DeliverPolicy {
+  DELIVER_POLICY_UNSPECIFIED = 0;
+  // DELIVER_POLICY_ALL delivers all messages from the beginning of the stream.
+  DELIVER_POLICY_ALL = 1;
+  // DELIVER_POLICY_LAST delivers only the last message per subject.
+  DELIVER_POLICY_LAST = 2;
+  // DELIVER_POLICY_NEW delivers only messages published after the consumer is created.
+  DELIVER_POLICY_NEW = 3;
+  // DELIVER_POLICY_BY_START_SEQUENCE delivers messages starting from a specific sequence.
+  DELIVER_POLICY_BY_START_SEQUENCE = 4;
+  // DELIVER_POLICY_BY_START_TIME delivers messages starting from a specific time.
+  DELIVER_POLICY_BY_START_TIME = 5;
+}
+
+// AckPolicy controls how consumers must acknowledge messages.
+enum AckPolicy {
+  ACK_POLICY_UNSPECIFIED = 0;
+  // ACK_POLICY_EXPLICIT requires explicit per-message acknowledgement (recommended).
+  ACK_POLICY_EXPLICIT = 1;
+  // ACK_POLICY_NONE disables acknowledgements entirely (fire-and-forget).
+  ACK_POLICY_NONE = 2;
+  // ACK_POLICY_ALL acknowledges all messages up to and including the specified sequence.
+  ACK_POLICY_ALL = 3;
+}
+
+// KafkaSecurityProtocol selects the client-broker transport security mode.
+enum KafkaSecurityProtocol {
+  KAFKA_SECURITY_PROTOCOL_UNSPECIFIED = 0;
+  KAFKA_SECURITY_PROTOCOL_PLAINTEXT = 1;
+  KAFKA_SECURITY_PROTOCOL_SSL = 2;
+  KAFKA_SECURITY_PROTOCOL_SASL_PLAINTEXT = 3;
+  KAFKA_SECURITY_PROTOCOL_SASL_SSL = 4;
+}
+
+// KafkaSaslMechanism selects the SASL authentication mechanism.
+enum KafkaSaslMechanism {
+  KAFKA_SASL_MECHANISM_UNSPECIFIED = 0;
+  KAFKA_SASL_MECHANISM_PLAIN = 1;
+  KAFKA_SASL_MECHANISM_SCRAM_SHA_256 = 2;
+  KAFKA_SASL_MECHANISM_SCRAM_SHA_512 = 3;
+}
+
 // ─── cluster / module configs ─────────────────────────────────────────────────
 
 // ClusterConfig is the typed config for infra.eventbus module.
@@ -13,7 +69,7 @@ message ClusterConfig {
   // provider selects the message-broker backend: "nats" | "kafka" | "kinesis".
   string provider = 1;
   // deploy_target selects the deployment platform:
-  // "digitalocean.app_platform" | "aws.ecs" | "aws.eks" | "kubernetes".
+  // "digitalocean.app_platform" | "aws.ecs" | "aws.eks" | "kubernetes" | etc.
   string deploy_target = 2;
   // version is the broker version to deploy (e.g. "2.10" for NATS).
   string version = 3;
@@ -46,11 +102,10 @@ message KafkaConfig {
   // bootstrap_servers is the initial broker address list (comma-separated).
   // Used when connecting to an existing Kafka cluster rather than provisioning one.
   string bootstrap_servers = 1;
-  // security_protocol specifies the protocol for client-broker communication:
-  // "PLAINTEXT" | "SSL" | "SASL_PLAINTEXT" | "SASL_SSL".
-  string security_protocol = 2;
-  // sasl_mechanism for SASL authentication: "PLAIN" | "SCRAM-SHA-256" | "SCRAM-SHA-512".
-  string sasl_mechanism = 3;
+  // security_protocol specifies the protocol for client-broker communication.
+  KafkaSecurityProtocol security_protocol = 2;
+  // sasl_mechanism for SASL authentication.
+  KafkaSaslMechanism sasl_mechanism = 3;
   // default_replication_factor for new topics (0 = use broker default).
   int32 default_replication_factor = 4;
   // min_insync_replicas is the minimum number of in-sync replicas required for acks.
@@ -83,8 +138,8 @@ message StreamConfig {
   string name = 1;
   // subjects lists the NATS subject filter patterns bound to this stream.
   repeated string subjects = 2;
-  // retention_policy controls message retention: "limits" | "interest" | "workqueue".
-  string retention_policy = 3;
+  // retention_policy controls message retention semantics.
+  RetentionPolicy retention_policy = 3;
   // num_replicas is the number of stream replicas within the cluster.
   int32 num_replicas = 4;
   // max_bytes caps total on-disk storage for this stream (0 = unlimited).
@@ -104,12 +159,10 @@ message ConsumerConfig {
   string stream_name = 2;
   // filter_subject narrows delivery to messages matching this subject pattern.
   string filter_subject = 3;
-  // deliver_policy controls which messages are delivered on first attach:
-  // "all" | "last" | "new" | "by_start_sequence" | "by_start_time".
-  string deliver_policy = 4;
-  // ack_policy controls how acknowledgements are required:
-  // "explicit" | "none" | "all".
-  string ack_policy = 5;
+  // deliver_policy controls which messages are delivered on first attach.
+  DeliverPolicy deliver_policy = 4;
+  // ack_policy controls how acknowledgements are required.
+  AckPolicy ack_policy = 5;
   // max_deliver is the maximum number of delivery attempts before NACKing (0 = unlimited).
   int32 max_deliver = 6;
 }

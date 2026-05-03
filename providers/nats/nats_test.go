@@ -128,7 +128,7 @@ func TestNATSProvider_StreamResources_EmitsStreamCreate(t *testing.T) {
 // matches the StreamConfig name.
 func TestNATSProvider_StreamResources_ResourceName(t *testing.T) {
 	p := nats.New()
-	streams := []*eventbusv1.StreamConfig{{Name: "BMW_FULFILLMENT"}}
+	streams := []*eventbusv1.StreamConfig{{Name: "BMW_FULFILLMENT", Subjects: []string{"fulfillment.>"}}}
 	res, err := p.StreamResources(streams, iac.State{})
 	if err != nil {
 		t.Fatalf("StreamResources() error: %v", err)
@@ -156,25 +156,67 @@ func TestNATSProvider_StreamResources_Subjects(t *testing.T) {
 }
 
 // TestNATSProvider_StreamResources_RetentionPolicy asserts the retention_policy
-// property is set from the StreamConfig enum.
+// property is emitted as the NATS-native lowercase value, not the proto enum name.
 func TestNATSProvider_StreamResources_RetentionPolicy(t *testing.T) {
-	p := nats.New()
-	streams := []*eventbusv1.StreamConfig{
-		{
-			Name:            "S",
-			RetentionPolicy: eventbusv1.RetentionPolicy_RETENTION_POLICY_WORKQUEUE,
-		},
+	cases := []struct {
+		rp   eventbusv1.RetentionPolicy
+		want string
+	}{
+		{eventbusv1.RetentionPolicy_RETENTION_POLICY_WORKQUEUE, "workqueue"},
+		{eventbusv1.RetentionPolicy_RETENTION_POLICY_INTEREST, "interest"},
+		{eventbusv1.RetentionPolicy_RETENTION_POLICY_LIMITS, "limits"},
+		{eventbusv1.RetentionPolicy_RETENTION_POLICY_UNSPECIFIED, "limits"}, // default → limits
 	}
+	p := nats.New()
+	for _, tc := range cases {
+		t.Run(tc.want, func(t *testing.T) {
+			streams := []*eventbusv1.StreamConfig{
+				{Name: "S", Subjects: []string{"s.>"}, RetentionPolicy: tc.rp},
+			}
+			res, err := p.StreamResources(streams, iac.State{})
+			if err != nil {
+				t.Fatalf("StreamResources() error: %v", err)
+			}
+			if got := res[0].Properties["retention_policy"]; got != tc.want {
+				t.Errorf("retention_policy = %q, want NATS-native %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestNATSProvider_StreamResources_EmptyNameErrors asserts StreamResources returns
+// an error when a StreamConfig has an empty name.
+func TestNATSProvider_StreamResources_EmptyNameErrors(t *testing.T) {
+	p := nats.New()
+	streams := []*eventbusv1.StreamConfig{{Name: "", Subjects: []string{"s.>"}}}
+	_, err := p.StreamResources(streams, iac.State{})
+	if err == nil {
+		t.Fatal("StreamResources() with empty name: expected error, got nil")
+	}
+}
+
+// TestNATSProvider_StreamResources_EmptySubjectsErrors asserts StreamResources
+// returns an error when a StreamConfig has no subjects.
+func TestNATSProvider_StreamResources_EmptySubjectsErrors(t *testing.T) {
+	p := nats.New()
+	streams := []*eventbusv1.StreamConfig{{Name: "S", Subjects: nil}}
+	_, err := p.StreamResources(streams, iac.State{})
+	if err == nil {
+		t.Fatal("StreamResources() with nil subjects: expected error, got nil")
+	}
+}
+
+// TestNATSProvider_StreamResources_DefaultNumReplicas asserts that an unset
+// NumReplicas (zero value) is emitted as "1", not "0".
+func TestNATSProvider_StreamResources_DefaultNumReplicas(t *testing.T) {
+	p := nats.New()
+	streams := []*eventbusv1.StreamConfig{{Name: "S", Subjects: []string{"s.>"}}}
 	res, err := p.StreamResources(streams, iac.State{})
 	if err != nil {
 		t.Fatalf("StreamResources() error: %v", err)
 	}
-	rp := res[0].Properties["retention_policy"]
-	if rp == "" {
-		t.Error("retention_policy property is empty")
-	}
-	if !strings.Contains(strings.ToUpper(rp), "WORKQUEUE") {
-		t.Errorf("retention_policy %q does not reflect WORKQUEUE", rp)
+	if got := res[0].Properties["num_replicas"]; got != "1" {
+		t.Errorf("num_replicas = %q, want %q (default)", got, "1")
 	}
 }
 
@@ -219,8 +261,9 @@ func TestNATSProvider_StreamResources_MaxAge(t *testing.T) {
 	p := nats.New()
 	streams := []*eventbusv1.StreamConfig{
 		{
-			Name:   "S",
-			MaxAge: durationpb.New(168 * 60 * 60 * 1e9), // 168h in nanoseconds
+			Name:     "S",
+			Subjects: []string{"s.>"},
+			MaxAge:   durationpb.New(168 * 60 * 60 * 1e9), // 168h in nanoseconds
 		},
 	}
 	res, err := p.StreamResources(streams, iac.State{})
@@ -237,9 +280,9 @@ func TestNATSProvider_StreamResources_MaxAge(t *testing.T) {
 func TestNATSProvider_StreamResources_NilSkipped(t *testing.T) {
 	p := nats.New()
 	streams := []*eventbusv1.StreamConfig{
-		{Name: "A"},
+		{Name: "A", Subjects: []string{"a.>"}},
 		nil,
-		{Name: "B"},
+		{Name: "B", Subjects: []string{"b.>"}},
 	}
 	res, err := p.StreamResources(streams, iac.State{})
 	if err != nil {

@@ -85,10 +85,27 @@ func (p *provider) ConnectionString(state iac.State, env string) (string, error)
 	return uri, nil
 }
 
+// retentionPolicyString converts a RetentionPolicy proto enum to the
+// NATS-native lowercase string value expected by the JetStream API.
+func retentionPolicyString(rp eventbusv1.RetentionPolicy) string {
+	switch rp {
+	case eventbusv1.RetentionPolicy_RETENTION_POLICY_INTEREST:
+		return "interest"
+	case eventbusv1.RetentionPolicy_RETENTION_POLICY_WORKQUEUE:
+		return "workqueue"
+	default: // UNSPECIFIED and LIMITS both map to the NATS default
+		return "limits"
+	}
+}
+
 // StreamResources implements providers.Provider.
 // It returns one nats.stream_create IaC resource for each StreamConfig.
 // These resources are consumed at provisioning time to declare JetStream streams
 // against the already-provisioned NATS cluster.
+//
+// Validation rules (fail-fast, return error):
+//   - stream name must be non-empty
+//   - at least one subject filter must be provided
 //
 // The "server_uri" property is populated from state when available so the
 // downstream realiser knows which server to configure the stream on.
@@ -102,15 +119,25 @@ func (p *provider) StreamResources(streams []*eventbusv1.StreamConfig, state iac
 	serverURI, _ := state.Output("uri")
 
 	resources := make([]iac.Resource, 0, len(streams))
-	for _, s := range streams {
+	for i, s := range streams {
 		if s == nil {
 			continue
+		}
+		if s.GetName() == "" {
+			return nil, fmt.Errorf("nats: StreamResources: stream at index %d has an empty name", i)
+		}
+		if len(s.GetSubjects()) == 0 {
+			return nil, fmt.Errorf("nats: StreamResources: stream %q has no subjects; at least one subject filter is required", s.GetName())
+		}
+		numReplicas := s.GetNumReplicas()
+		if numReplicas <= 0 {
+			numReplicas = 1
 		}
 		props := map[string]string{
 			"name":             s.GetName(),
 			"subjects":         strings.Join(s.GetSubjects(), ","),
-			"retention_policy": s.GetRetentionPolicy().String(),
-			"num_replicas":     fmt.Sprintf("%d", s.GetNumReplicas()),
+			"retention_policy": retentionPolicyString(s.GetRetentionPolicy()),
+			"num_replicas":     fmt.Sprintf("%d", numReplicas),
 			"max_bytes":        fmt.Sprintf("%d", s.GetMaxBytes()),
 		}
 		if serverURI != "" {

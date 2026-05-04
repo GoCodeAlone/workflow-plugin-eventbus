@@ -111,15 +111,26 @@ func TestNATSConformance_DOApp(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Resources() error: %v", err)
 		}
-		if len(resources) < 2 {
-			t.Fatalf("Resources() returned %d resources, want ≥2 (container_service + storage)", len(resources))
+
+		// Locate resources by Kind rather than index so the test is resilient to
+		// ordering changes in resourcesForDOApp.
+		var cs, st *iac.Resource
+		for i := range resources {
+			switch resources[i].Kind {
+			case "infra.container_service":
+				cs = &resources[i]
+			case "infra.storage":
+				st = &resources[i]
+			}
+		}
+		if cs == nil {
+			t.Fatal("provision: no infra.container_service resource emitted")
+		}
+		if st == nil {
+			t.Fatal("provision: no infra.storage resource emitted (JetStream requires it)")
 		}
 
 		// ── container service ────────────────────────────────────────────────
-		cs := resources[0]
-		if cs.Kind != "infra.container_service" {
-			t.Errorf("resources[0].Kind = %q, want %q", cs.Kind, "infra.container_service")
-		}
 		if !strings.HasPrefix(cs.Properties["image"], "docker.io/library/nats") {
 			t.Errorf("image = %q, want prefix %q", cs.Properties["image"], "docker.io/library/nats")
 		}
@@ -135,10 +146,6 @@ func TestNATSConformance_DOApp(t *testing.T) {
 		}
 
 		// ── jetstream storage volume ─────────────────────────────────────────
-		st := resources[1]
-		if st.Kind != "infra.storage" {
-			t.Errorf("resources[1].Kind = %q, want %q", st.Kind, "infra.storage")
-		}
 		if st.Properties["storage_size_bytes"] == "" {
 			t.Error("infra.storage: storage_size_bytes property is empty")
 		}

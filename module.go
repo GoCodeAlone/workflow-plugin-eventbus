@@ -173,6 +173,26 @@ var natsDialFn = func(uri string) (*nats.Conn, error) {
 	)
 }
 
+// DefaultBusConn returns a live NATS connection for the first registered
+// infra.eventbus module. Suitable for single-bus workflow deployments (e.g. the
+// BMW pilot). For multi-bus workflows, use GetOrDialNATSConn(instanceName)
+// directly.
+func DefaultBusConn() (*nats.Conn, error) {
+	clusterMu.RLock()
+	var first string
+	for name := range clusterRegistry {
+		first = name
+		break
+	}
+	clusterMu.RUnlock()
+	if first == "" {
+		return nil, fmt.Errorf(
+			"infra.eventbus: no bus module registered; add an infra.eventbus module to your workflow config",
+		)
+	}
+	return GetOrDialNATSConn(first)
+}
+
 // ── ClusterModuleFactory (TypedModuleProvider) ────────────────────────────────
 
 // ClusterModuleFactory implements sdk.TypedModuleProvider for the infra.eventbus

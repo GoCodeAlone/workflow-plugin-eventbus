@@ -40,6 +40,21 @@ func UnregisterConsumer(instanceName string) {
 	delete(consumerRegistry, instanceName)
 }
 
+// GetConsumerByName looks up a ConsumerConfig by its durable consumer name
+// (cfg.name), iterating all registered instances. This is used by
+// step.eventbus.consume to resolve the consumer config from the durable name
+// supplied in ConsumeRequest.consumer.
+func GetConsumerByName(durableName string) (*eventbusv1.ConsumerConfig, bool) {
+	consumerMu.RLock()
+	defer consumerMu.RUnlock()
+	for _, cfg := range consumerRegistry {
+		if cfg.GetName() == durableName {
+			return cfg, true
+		}
+	}
+	return nil, false
+}
+
 // ── ConsumerModuleFactory (TypedModuleProvider) ───────────────────────────────
 
 // ConsumerModuleFactory implements sdk.TypedModuleProvider for the

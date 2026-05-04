@@ -9,6 +9,35 @@ import (
 	eventbusv1 "github.com/GoCodeAlone/workflow-plugin-eventbus/gen"
 )
 
+// ── ClusterModuleFactory (TypedModuleProvider) ────────────────────────────────
+
+func TestClusterModuleFactory_TypedModuleTypes(t *testing.T) {
+	f := &eventbus.ClusterModuleFactory{}
+	types := f.TypedModuleTypes()
+	if len(types) != 1 || types[0] != "infra.eventbus" {
+		t.Errorf("TypedModuleTypes() = %v, want [infra.eventbus]", types)
+	}
+}
+
+func TestClusterModuleFactory_CreateTypedModule_WrongType(t *testing.T) {
+	f := &eventbus.ClusterModuleFactory{}
+	_, err := f.CreateTypedModule("infra.eventbus.stream", "x", nil)
+	if err == nil {
+		t.Fatal("expected error for wrong type")
+	}
+}
+
+func TestClusterModuleFactory_CreateTypedModule_NilConfig(t *testing.T) {
+	f := &eventbus.ClusterModuleFactory{}
+	// nil config → ClusterConfig zero value → empty provider → expect error
+	_, err := f.CreateTypedModule("infra.eventbus", "bus-factory-nil", nil)
+	if err == nil {
+		t.Fatal("expected error from NewClusterModule for empty provider")
+	}
+}
+
+// ── NewClusterModule validation ───────────────────────────────────────────────
+
 func TestNewClusterModule_ValidConfig(t *testing.T) {
 	cfg := &eventbusv1.ClusterConfig{
 		Provider:     "nats",
@@ -53,6 +82,8 @@ func TestNewClusterModule_UnsupportedProviderTarget(t *testing.T) {
 		t.Fatal("expected error for unsupported provider × target combination")
 	}
 }
+
+// ── clusterModule lifecycle ───────────────────────────────────────────────────
 
 func TestClusterModule_InitRegistersConfig(t *testing.T) {
 	cfg := &eventbusv1.ClusterConfig{
@@ -133,7 +164,6 @@ func TestClusterModule_InitRegistersURIFromInstanceEnvVar(t *testing.T) {
 }
 
 func TestClusterModule_InitNoURIWhenEnvNotSet(t *testing.T) {
-	// Ensure neither env var is set.
 	os.Unsetenv("NATS_URL")
 	os.Unsetenv("EVENTBUS_BUS_NO_URI_URI")
 
@@ -148,5 +178,33 @@ func TestClusterModule_InitNoURIWhenEnvNotSet(t *testing.T) {
 	_, ok := eventbus.GetBusURI("bus-no-uri")
 	if ok {
 		t.Fatal("expected no URI in registry when env vars are absent")
+	}
+}
+
+// TestClusterModule_StopEvictsNATSConn verifies that Stop() evicts a connection
+// pre-seeded into the cache (simulating a step or trigger that dialled on behalf
+// of the module). Wire-level close behaviour is exercised by the integration test;
+// here we only verify cache eviction using a nil sentinel entry.
+func TestClusterModule_StopEvictsNATSConn(t *testing.T) {
+	cfg := &eventbusv1.ClusterConfig{
+		Provider:     "nats",
+		DeployTarget: "digitalocean.app_platform",
+	}
+	m, _ := eventbus.NewClusterModule("bus-conn-evict", cfg)
+	_ = m.Init()
+
+	// Pre-seed with a nil sentinel (nil is safe: closeNATSConn guards against nil).
+	eventbus.RegisterNATSConn("bus-conn-evict", nil)
+
+	_, inCache := eventbus.GetNATSConn("bus-conn-evict")
+	if !inCache {
+		t.Fatal("expected sentinel in cache before Stop")
+	}
+
+	_ = m.Stop(context.Background())
+
+	_, inCacheAfter := eventbus.GetNATSConn("bus-conn-evict")
+	if inCacheAfter {
+		t.Fatal("expected sentinel evicted from cache after Stop")
 	}
 }

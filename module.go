@@ -9,6 +9,10 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/nats-io/nats.go"
+	"google.golang.org/protobuf/types/known/anypb"
 
 	eventbusv1 "github.com/GoCodeAlone/workflow-plugin-eventbus/gen"
 	"github.com/GoCodeAlone/workflow-plugin-eventbus/providers"
@@ -47,10 +51,10 @@ func UnregisterCluster(instanceName string) {
 // ── bus URI registry ──────────────────────────────────────────────────────────
 
 // busURIRegistry stores broker connection URIs keyed by module instance name.
-// Steps look up the URI here to obtain a NATS (or Kafka/Kinesis) connection.
+// Steps look up the URI here via GetOrDialNATSConn to obtain a live connection.
 var (
-	urlMu           sync.RWMutex
-	busURIRegistry  = make(map[string]string)
+	urlMu          sync.RWMutex
+	busURIRegistry = make(map[string]string)
 )
 
 // RegisterBusURI stores a broker URI under instanceName.
@@ -75,11 +79,116 @@ func UnregisterBusURI(instanceName string) {
 	delete(busURIRegistry, instanceName)
 }
 
-// ── clusterModule ─────────────────────────────────────────────────────────────
+// ── NATS connection cache ─────────────────────────────────────────────────────
+
+// natsConnCache holds one live *nats.Conn per bus instance name.
+// Connections are created lazily on the first call to GetOrDialNATSConn.
+// Module.Stop() closes and evicts the entry via closeNATSConn.
+var (
+	connCacheMu sync.Mutex
+	natsConnCache = make(map[string]*nats.Conn)
+)
+
+// RegisterNATSConn stores a live connection under instanceName. Exported so that
+// integration tests and the trigger can pre-populate the cache.
+func RegisterNATSConn(instanceName string, conn *nats.Conn) {
+	connCacheMu.Lock()
+	defer connCacheMu.Unlock()
+	natsConnCache[instanceName] = conn
+}
+
+// GetNATSConn returns the cached *nats.Conn for instanceName, or false if absent.
+func GetNATSConn(instanceName string) (*nats.Conn, bool) {
+	connCacheMu.Lock()
+	defer connCacheMu.Unlock()
+	conn, ok := natsConnCache[instanceName]
+	return conn, ok
+}
+
+// GetOrDialNATSConn returns the cached NATS connection for instanceName, dialing
+// a new one (via natsDialFn) if no live connection is cached. Returns an error if
+// no URI is registered for instanceName or the dial fails.
+func GetOrDialNATSConn(instanceName string) (*nats.Conn, error) {
+	connCacheMu.Lock()
+	defer connCacheMu.Unlock()
+
+	if conn, ok := natsConnCache[instanceName]; ok && conn.IsConnected() {
+		return conn, nil
+	}
+	// Stale or missing — evict and re-dial.
+	delete(natsConnCache, instanceName)
+
+	uri, ok := GetBusURI(instanceName)
+	if !ok || uri == "" {
+		key := strings.ToUpper(strings.ReplaceAll(instanceName, "-", "_"))
+		return nil, fmt.Errorf(
+			"infra.eventbus: no URI registered for bus %q; set EVENTBUS_%s_URI or NATS_URL",
+			instanceName, key)
+	}
+	nc, err := natsDialFn(uri)
+	if err != nil {
+		return nil, fmt.Errorf("infra.eventbus: dial NATS for bus %q at %s: %w", instanceName, uri, err)
+	}
+	natsConnCache[instanceName] = nc
+	return nc, nil
+}
+
+// closeNATSConn closes the cached connection for instanceName and evicts it from
+// the cache. It is idempotent — a missing or nil entry is not an error.
+func closeNATSConn(instanceName string) {
+	connCacheMu.Lock()
+	defer connCacheMu.Unlock()
+	if conn, ok := natsConnCache[instanceName]; ok {
+		if conn != nil {
+			conn.Close()
+		}
+		delete(natsConnCache, instanceName)
+	}
+}
+
+// natsDialFn is the function used to create NATS connections. Tests may replace
+// this package-level variable to inject a mock without a real NATS server.
+var natsDialFn = func(uri string) (*nats.Conn, error) {
+	return nats.Connect(uri,
+		nats.MaxReconnects(-1),
+		nats.ReconnectWait(2*time.Second),
+		nats.Timeout(5*time.Second),
+	)
+}
+
+// ── ClusterModuleFactory (TypedModuleProvider) ────────────────────────────────
+
+// ClusterModuleFactory implements sdk.TypedModuleProvider for the infra.eventbus
+// module type. The plugin wires this factory into CreateTypedModule.
+type ClusterModuleFactory struct{}
+
+// Compile-time assertion: ClusterModuleFactory implements sdk.TypedModuleProvider.
+var _ sdk.TypedModuleProvider = (*ClusterModuleFactory)(nil)
+
+// TypedModuleTypes returns the single module type served by this factory.
+func (f *ClusterModuleFactory) TypedModuleTypes() []string {
+	return []string{"infra.eventbus"}
+}
+
+// CreateTypedModule unpacks the typed proto config and delegates to NewClusterModule.
+func (f *ClusterModuleFactory) CreateTypedModule(typeName, name string, config *anypb.Any) (sdk.ModuleInstance, error) {
+	if typeName != "infra.eventbus" {
+		return nil, fmt.Errorf("%w: module type %q", sdk.ErrTypedContractNotHandled, typeName)
+	}
+	var cfg eventbusv1.ClusterConfig
+	if config != nil {
+		if err := config.UnmarshalTo(&cfg); err != nil {
+			return nil, fmt.Errorf("infra.eventbus %q: unmarshal typed config: %w", name, err)
+		}
+	}
+	return NewClusterModule(name, &cfg)
+}
+
+// ── clusterModule (ModuleInstance) ───────────────────────────────────────────
 
 // clusterModule implements sdk.ModuleInstance for the infra.eventbus module type.
-// It validates the ClusterConfig, registers it for use by stream, consumer, and
-// step modules, and resolves the broker URI from environment variables.
+// It validates the ClusterConfig, registers the config and broker URI on Init(),
+// and closes the cached NATS connection on Stop().
 type clusterModule struct {
 	instanceName string
 	config       *eventbusv1.ClusterConfig
@@ -97,6 +206,9 @@ func NewClusterModule(instanceName string, cfg *eventbusv1.ClusterConfig) (sdk.M
 	if cfg.GetProvider() == "" {
 		return nil, fmt.Errorf("infra.eventbus %q: config.provider is required", instanceName)
 	}
+	if cfg.GetDeployTarget() == "" {
+		return nil, fmt.Errorf("infra.eventbus %q: config.deploy_target is required", instanceName)
+	}
 	target := providers.DeployTarget(cfg.GetDeployTarget())
 	if err := providers.ValidateProviderTarget(cfg.GetProvider(), target); err != nil {
 		return nil, fmt.Errorf("infra.eventbus %q: %w", instanceName, err)
@@ -110,9 +222,9 @@ func NewClusterModule(instanceName string, cfg *eventbusv1.ClusterConfig) (sdk.M
 //  1. EVENTBUS_<UPPERCASE_INSTANCE_NAME>_URI (e.g. EVENTBUS_BMW_EVENTBUS_URI)
 //  2. NATS_URL (fallback for the nats provider only)
 //
-// If neither env var is set the URI is not registered; steps will fail at
-// execution time if they need a live connection. This is intentional — the
-// module remains valid for IaC-only (plan/apply) workflows.
+// If neither env var is set the URI is not registered. Steps that need a live
+// connection will fail at execution time with a descriptive error. This is
+// intentional — the module remains valid for IaC-only (plan/apply) workflows.
 func (m *clusterModule) Init() error {
 	RegisterCluster(m.instanceName, m.config)
 
@@ -128,12 +240,14 @@ func (m *clusterModule) Init() error {
 	return nil
 }
 
-// Start is a no-op; NATS connections are established lazily by steps.
+// Start is a no-op; NATS connections are established lazily by GetOrDialNATSConn.
 func (m *clusterModule) Start(_ context.Context) error { return nil }
 
-// Stop unregisters the cluster config and URI from global registries.
+// Stop closes the cached NATS connection (if any) and unregisters the cluster
+// config and URI from global registries.
 func (m *clusterModule) Stop(_ context.Context) error {
-	UnregisterCluster(m.instanceName)
+	closeNATSConn(m.instanceName) // drain + close cached *nats.Conn, idempotent
 	UnregisterBusURI(m.instanceName)
+	UnregisterCluster(m.instanceName)
 	return nil
 }

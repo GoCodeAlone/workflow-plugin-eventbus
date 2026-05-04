@@ -8,6 +8,35 @@ import (
 	eventbusv1 "github.com/GoCodeAlone/workflow-plugin-eventbus/gen"
 )
 
+// ── StreamModuleFactory (TypedModuleProvider) ─────────────────────────────────
+
+func TestStreamModuleFactory_TypedModuleTypes(t *testing.T) {
+	f := &eventbus.StreamModuleFactory{}
+	types := f.TypedModuleTypes()
+	if len(types) != 1 || types[0] != "infra.eventbus.stream" {
+		t.Errorf("TypedModuleTypes() = %v, want [infra.eventbus.stream]", types)
+	}
+}
+
+func TestStreamModuleFactory_CreateTypedModule_WrongType(t *testing.T) {
+	f := &eventbus.StreamModuleFactory{}
+	_, err := f.CreateTypedModule("infra.eventbus", "x", nil)
+	if err == nil {
+		t.Fatal("expected error for wrong type")
+	}
+}
+
+func TestStreamModuleFactory_CreateTypedModule_NilConfig(t *testing.T) {
+	f := &eventbus.StreamModuleFactory{}
+	// nil config → StreamConfig zero value → empty name → expect error
+	_, err := f.CreateTypedModule("infra.eventbus.stream", "stream-factory-nil", nil)
+	if err == nil {
+		t.Fatal("expected error from NewStreamModule for empty name")
+	}
+}
+
+// ── NewStreamModule validation ────────────────────────────────────────────────
+
 func TestNewStreamModule_ValidConfig(t *testing.T) {
 	cfg := &eventbusv1.StreamConfig{
 		Name:     "BMW_FULFILLMENT",
@@ -41,6 +70,8 @@ func TestNewStreamModule_EmptySubjects(t *testing.T) {
 		t.Fatal("expected error for empty subjects")
 	}
 }
+
+// ── streamModule lifecycle ────────────────────────────────────────────────────
 
 func TestStreamModule_InitRegistersConfig(t *testing.T) {
 	cfg := &eventbusv1.StreamConfig{

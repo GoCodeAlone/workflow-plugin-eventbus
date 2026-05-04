@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sync"
 
+	"google.golang.org/protobuf/types/known/anypb"
+
 	eventbusv1 "github.com/GoCodeAlone/workflow-plugin-eventbus/gen"
 	sdk "github.com/GoCodeAlone/workflow/plugin/external/sdk"
 )
@@ -38,11 +40,40 @@ func UnregisterConsumer(instanceName string) {
 	delete(consumerRegistry, instanceName)
 }
 
-// ── consumerModule ────────────────────────────────────────────────────────────
+// ── ConsumerModuleFactory (TypedModuleProvider) ───────────────────────────────
+
+// ConsumerModuleFactory implements sdk.TypedModuleProvider for the
+// infra.eventbus.consumer module type.
+type ConsumerModuleFactory struct{}
+
+// Compile-time assertion: ConsumerModuleFactory implements sdk.TypedModuleProvider.
+var _ sdk.TypedModuleProvider = (*ConsumerModuleFactory)(nil)
+
+// TypedModuleTypes returns the single module type served by this factory.
+func (f *ConsumerModuleFactory) TypedModuleTypes() []string {
+	return []string{"infra.eventbus.consumer"}
+}
+
+// CreateTypedModule unpacks the typed proto config and delegates to NewConsumerModule.
+func (f *ConsumerModuleFactory) CreateTypedModule(typeName, name string, config *anypb.Any) (sdk.ModuleInstance, error) {
+	if typeName != "infra.eventbus.consumer" {
+		return nil, fmt.Errorf("%w: module type %q", sdk.ErrTypedContractNotHandled, typeName)
+	}
+	var cfg eventbusv1.ConsumerConfig
+	if config != nil {
+		if err := config.UnmarshalTo(&cfg); err != nil {
+			return nil, fmt.Errorf("infra.eventbus.consumer %q: unmarshal typed config: %w", name, err)
+		}
+	}
+	return NewConsumerModule(name, &cfg)
+}
+
+// ── consumerModule (ModuleInstance) ──────────────────────────────────────────
 
 // consumerModule implements sdk.ModuleInstance for the infra.eventbus.consumer
 // module type. It declares a durable JetStream consumer (or Kafka consumer group)
-// and registers its config for use by step and trigger modules.
+// and registers its config for use by step and trigger modules. No background
+// goroutines are started — consumption is pull-based, driven by step execution.
 type consumerModule struct {
 	instanceName string
 	config       *eventbusv1.ConsumerConfig
@@ -72,7 +103,8 @@ func (m *consumerModule) Init() error {
 	return nil
 }
 
-// Start is a no-op for the consumer module.
+// Start is a no-op for the consumer module. Pull-based consumption has no
+// background goroutines — the step.eventbus.consume step drives fetch calls.
 func (m *consumerModule) Start(_ context.Context) error { return nil }
 
 // Stop unregisters the consumer config from the global registry.

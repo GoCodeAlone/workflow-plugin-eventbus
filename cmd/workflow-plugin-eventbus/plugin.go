@@ -122,9 +122,18 @@ func (p *eventbusPlugin) CreateTrigger(typeName string, config map[string]any, c
 	if typeName != "trigger.eventbus.subscribe" {
 		return nil, fmt.Errorf("workflow-plugin-eventbus: unknown trigger type %q", typeName)
 	}
-	name, _ := config["name"].(string)
-	streamName, _ := config["stream_name"].(string)
-	filterSubject, _ := config["filter_subject"].(string)
+	// Perform explicit type assertions so callers get a clear error when a field
+	// is present but has the wrong type (e.g. config["name"] = 42 gives
+	// "config[name] must be a string, got int" rather than "config.name is required").
+	name, err := configString(config, "name")
+	if err != nil {
+		return nil, fmt.Errorf("workflow-plugin-eventbus: CreateTrigger %q: %w", typeName, err)
+	}
+	streamName, err := configString(config, "stream_name")
+	if err != nil {
+		return nil, fmt.Errorf("workflow-plugin-eventbus: CreateTrigger %q: %w", typeName, err)
+	}
+	filterSubject, _ := configString(config, "filter_subject") //nolint:errcheck // optional field
 	cfg := &eventbusv1.ConsumerConfig{
 		Name:          name,
 		StreamName:    streamName,
@@ -135,6 +144,20 @@ func (p *eventbusPlugin) CreateTrigger(typeName string, config map[string]any, c
 		return nil, err
 	}
 	return inst.(sdk.TriggerInstance), nil
+}
+
+// configString extracts key from config as a string. Returns an error if the
+// key is present but not a string type.
+func configString(config map[string]any, key string) (string, error) {
+	v, ok := config[key]
+	if !ok {
+		return "", nil // absent is fine; required-field validation is in NewSubscribeTrigger
+	}
+	s, ok := v.(string)
+	if !ok {
+		return "", fmt.Errorf("config[%s] must be a string, got %T", key, v)
+	}
+	return s, nil
 }
 
 // ── ContractProvider ──────────────────────────────────────────────────────────

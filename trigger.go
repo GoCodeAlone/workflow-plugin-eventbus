@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -64,8 +65,8 @@ type subscribeTrigger struct {
 	config       *eventbusv1.ConsumerConfig
 	cb           sdk.TriggerCallback
 
-	cancel context.CancelFunc  // set by Start; nil before first Start
-	done   chan struct{}        // closed when the goroutine exits (nil before first Start with cb)
+	cancel context.CancelFunc // set by Start; nil before first Start
+	done   chan struct{}       // closed when the goroutine exits (nil before first Start with cb)
 }
 
 // Compile-time assertions.
@@ -103,10 +104,16 @@ func (t *subscribeTrigger) Init() error { return nil }
 
 // Start launches the trigger goroutine if cb is non-nil. If cb is nil (the
 // external plugin gRPC path), Start is a no-op.
+//
+// Returns an error if Start has already been called without a matching Stop
+// (double-start guard: avoids goroutine leak when the SDK calls Start twice).
 func (t *subscribeTrigger) Start(ctx context.Context) error {
 	if t.cb == nil {
 		// External plugin path: callback is never wired — no goroutine needed.
 		return nil
+	}
+	if t.cancel != nil {
+		return fmt.Errorf("trigger.eventbus.subscribe %q: already started", t.instanceName)
 	}
 
 	trigCtx, cancel := context.WithCancel(ctx)
@@ -134,6 +141,9 @@ func (t *subscribeTrigger) Stop(_ context.Context) error {
 func (t *subscribeTrigger) fetchLoop(ctx context.Context) {
 	defer close(t.done)
 
+	backoff := time.NewTimer(time.Second)
+	defer backoff.Stop()
+
 	for {
 		// Exit immediately on context cancellation before each fetch round.
 		select {
@@ -143,13 +153,20 @@ func (t *subscribeTrigger) fetchLoop(ctx context.Context) {
 		}
 
 		if err := t.fetchAndFire(ctx); err != nil {
-			// Log the error but keep retrying — the bus may be temporarily
-			// unavailable or the stream may not exist yet.
-			// A 1-second back-off prevents a tight spin loop on persistent errors.
+			// Keep retrying — the bus may be temporarily unavailable or the
+			// stream may not exist yet. Drain the backoff timer before resetting
+			// to avoid a spurious immediate fire on the next error.
+			if !backoff.Stop() {
+				select {
+				case <-backoff.C:
+				default:
+				}
+			}
+			backoff.Reset(time.Second)
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(time.Second):
+			case <-backoff.C:
 			}
 		}
 	}
@@ -158,6 +175,10 @@ func (t *subscribeTrigger) fetchLoop(ctx context.Context) {
 // fetchAndFire dials the bus, fetches one batch of messages, and invokes cb for
 // each one. It returns an error if the connection or fetch fails (the caller
 // retries). A JetStream timeout (empty batch) is not treated as an error.
+//
+// The callback data map mirrors the workflow.plugin.eventbus.v1.Message proto:
+// "subject", "payload" ([]byte), "headers" (map[string]string), "sequence",
+// "published_at", "ack_token".
 func (t *subscribeTrigger) fetchAndFire(ctx context.Context) error {
 	nc, err := DefaultBusConn()
 	if err != nil {
@@ -186,13 +207,36 @@ func (t *subscribeTrigger) fetchAndFire(ctx context.Context) error {
 	}
 
 	for _, m := range msgs {
+		// Build a typed Message to ensure field names and types match the proto contract:
+		// workflow.plugin.eventbus.v1.Message (subject, payload, headers, sequence,
+		// published_at, ack_token). This mirrors ConsumeHandler in steps/consume.go.
+		pbMsg := &eventbusv1.Message{
+			Subject:  m.Subject,
+			Payload:  m.Data,  // []byte — not string; proto field type is bytes
+			AckToken: m.Reply, // NATS reply subject used as ack_token
+		}
+		if len(m.Header) > 0 {
+			pbMsg.Headers = make(map[string]string, len(m.Header))
+			for k, vals := range m.Header {
+				if len(vals) > 0 {
+					pbMsg.Headers[k] = vals[0]
+				}
+			}
+		}
+		if meta, err := m.Metadata(); err == nil && meta != nil {
+			pbMsg.Sequence = strconv.FormatUint(meta.Sequence.Stream, 10)
+			pbMsg.PublishedAt = meta.Timestamp.UTC().Format(time.RFC3339)
+		}
+
 		data := map[string]any{
-			"subject": m.Subject,
-			"payload": string(m.Data),
-			"reply":   m.Reply,
+			"subject":      pbMsg.Subject,
+			"payload":      pbMsg.Payload,
+			"headers":      pbMsg.Headers,
+			"sequence":     pbMsg.Sequence,
+			"published_at": pbMsg.PublishedAt,
+			"ack_token":    pbMsg.AckToken,
 		}
 		if err := t.cb("message", data); err != nil {
-			// Callback errors are non-fatal; log via returned error and continue.
 			return fmt.Errorf("trigger.eventbus.subscribe %q: callback: %w", t.instanceName, err)
 		}
 	}

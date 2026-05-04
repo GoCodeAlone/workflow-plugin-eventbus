@@ -1,14 +1,19 @@
 // Package providers_test contains conformance tests that exercise the complete
-// Provider interface lifecycle from provision through health probe.
+// Provider interface lifecycle from provision through teardown.
 //
 // NATS × DigitalOcean App Platform tests are gated behind INTEGRATION_NATS_DO=1
 // and skipped cleanly when the variable is absent — no panic, no setup overhead.
+// The runtime phases (publish → consume → ack → drain → teardown) require a
+// reachable NATS server; set NATS_URL to override the default localhost:4222.
 package providers_test
 
 import (
 	"os"
 	"strings"
 	"testing"
+	"time"
+
+	natsclient "github.com/nats-io/nats.go"
 
 	eventbusv1 "github.com/GoCodeAlone/workflow-plugin-eventbus/gen"
 	"github.com/GoCodeAlone/workflow-plugin-eventbus/iac"
@@ -26,6 +31,15 @@ func skipUnlessNATSDO(t *testing.T) {
 	if os.Getenv(integrationKey) == "" {
 		t.Skipf("set %s=1 to run NATS × DigitalOcean App Platform conformance tests", integrationKey)
 	}
+}
+
+// natsServerURI returns the NATS server URI for integration tests.
+// NATS_URL env var overrides the default; falls back to localhost:4222.
+func natsServerURI() string {
+	if u := os.Getenv("NATS_URL"); u != "" {
+		return u
+	}
+	return natsclient.DefaultURL // "nats://127.0.0.1:4222"
 }
 
 // provisionedState simulates IaC state after a NATS cluster has been provisioned
@@ -68,15 +82,22 @@ func bmwStreams() []*eventbusv1.StreamConfig {
 	}
 }
 
-// TestNATSConformance_DOApp exercises the complete Provider lifecycle for
-// NATS × DigitalOcean App Platform across four lifecycle steps:
+// TestNATSConformance_DOApp exercises the complete NATS × DigitalOcean App
+// Platform Provider lifecycle across nine phases:
 //
 //  1. provision  — Resources() emits valid IaC cluster declarations
 //  2. stream     — StreamResources() emits valid nats.stream_create resources
 //  3. connect    — ConnectionString() derives the correct broker URI from state
 //  4. probe      — Probe() returns a HealthCheck without panicking
+//  5. publish    — connect to NATS server, create JetStream stream, publish message
+//  6. consume    — subscribe and fetch the published message
+//  7. ack        — acknowledge the fetched message
+//  8. drain      — drain the subscription
+//  9. teardown   — delete the stream, assert it is gone
 //
 // All subtests require INTEGRATION_NATS_DO=1.
+// Runtime phases (5–9) additionally require a reachable NATS server (NATS_URL
+// or localhost:4222 by default).
 func TestNATSConformance_DOApp(t *testing.T) {
 	skipUnlessNATSDO(t)
 
@@ -238,4 +259,162 @@ func TestNATSConformance_DOApp(t *testing.T) {
 			t.Error("Probe(\"\").Err should be non-nil for empty URI")
 		}
 	})
+
+	// ── Runtime phases 5–9: publish → consume → ack → drain → teardown ───────
+	//
+	// These phases connect to a live NATS server (NATS_URL or localhost:4222)
+	// and verify end-to-end message flow through a JetStream stream.
+	// Shared mutable state is captured in the parent scope; each subtest nil-guards
+	// its dependencies so a partial failure produces a SKIP rather than a panic.
+	// nc is closed via the parent test's Cleanup so it outlives all subtests.
+
+	const (
+		conformanceStream   = "CONFORMANCE_TEST"
+		conformanceSubject  = "conformance.test"
+		conformanceConsumer = "conformance-consumer"
+		conformancePayload  = "conformance-check"
+	)
+
+	var (
+		nc         *natsclient.Conn
+		js         natsclient.JetStreamContext
+		sub        *natsclient.Subscription
+		fetchedMsg *natsclient.Msg
+	)
+
+	// Register nc close on the parent test — nc must outlive all subtests.
+	t.Cleanup(func() {
+		if nc != nil {
+			nc.Close()
+		}
+	})
+
+	// ── 5. publish ────────────────────────────────────────────────────────────
+	t.Run("publish", func(t *testing.T) {
+		var err error
+		nc, err = natsclient.Connect(natsServerURI())
+		if err != nil {
+			t.Fatalf("nats.Connect(%q) error: %v — ensure a NATS server is running (NATS_URL overrides default)", natsServerURI(), err)
+		}
+
+		js, err = nc.JetStream()
+		if err != nil {
+			t.Fatalf("nc.JetStream() error: %v", err)
+		}
+
+		// Clean up any leftover stream from a previous interrupted run.
+		_ = js.DeleteStream(conformanceStream)
+
+		_, err = js.AddStream(&natsclient.StreamConfig{
+			Name:      conformanceStream,
+			Subjects:  []string{conformanceSubject},
+			Retention: natsclient.LimitsPolicy,
+			Replicas:  1,
+		})
+		if err != nil {
+			t.Fatalf("js.AddStream(%q) error: %v", conformanceStream, err)
+		}
+
+		pubAck, err := js.Publish(conformanceSubject, []byte(conformancePayload))
+		if err != nil {
+			t.Fatalf("js.Publish(%q) error: %v", conformanceSubject, err)
+		}
+		if pubAck.Stream != conformanceStream {
+			t.Errorf("PubAck.Stream = %q, want %q", pubAck.Stream, conformanceStream)
+		}
+		if pubAck.Sequence != 1 {
+			t.Errorf("PubAck.Sequence = %d, want 1 (first message in stream)", pubAck.Sequence)
+		}
+	})
+
+	// ── 6. consume ────────────────────────────────────────────────────────────
+	t.Run("consume", func(t *testing.T) {
+		if js == nil {
+			t.Skip("skipping: publish phase did not establish a JetStream context")
+		}
+		var err error
+		sub, err = js.SubscribeSync(conformanceSubject, natsclient.Durable(conformanceConsumer))
+		if err != nil {
+			t.Fatalf("js.SubscribeSync(%q) error: %v", conformanceSubject, err)
+		}
+		fetchedMsg, err = sub.NextMsg(2 * time.Second)
+		if err != nil {
+			t.Fatalf("sub.NextMsg() error: %v", err)
+		}
+		if string(fetchedMsg.Data) != conformancePayload {
+			t.Errorf("message payload = %q, want %q", string(fetchedMsg.Data), conformancePayload)
+		}
+	})
+
+	// ── 7. ack ────────────────────────────────────────────────────────────────
+	t.Run("ack", func(t *testing.T) {
+		if fetchedMsg == nil {
+			t.Skip("skipping: consume phase did not produce a message")
+		}
+		if err := fetchedMsg.Ack(); err != nil {
+			t.Fatalf("msg.Ack() error: %v", err)
+		}
+	})
+
+	// ── 8. drain ──────────────────────────────────────────────────────────────
+	t.Run("drain", func(t *testing.T) {
+		if sub == nil {
+			t.Skip("skipping: consume phase did not produce a subscription")
+		}
+		if err := sub.Drain(); err != nil {
+			t.Fatalf("sub.Drain() error: %v", err)
+		}
+	})
+
+	// ── 9. teardown ───────────────────────────────────────────────────────────
+	t.Run("teardown", func(t *testing.T) {
+		if js == nil {
+			t.Skip("skipping: publish phase did not establish a JetStream context")
+		}
+		if err := js.DeleteStream(conformanceStream); err != nil {
+			t.Fatalf("js.DeleteStream(%q) error: %v", conformanceStream, err)
+		}
+		// Confirm the stream is gone — StreamInfo should return an error.
+		_, err := js.StreamInfo(conformanceStream)
+		if err == nil {
+			t.Errorf("js.StreamInfo(%q) succeeded after deletion; stream was not torn down", conformanceStream)
+		}
+	})
+}
+
+// TestNATSConformance_StubTargets asserts that every not-yet-activated deploy
+// target (ECS, EKS, Kubernetes, SelfHosted) returns a non-nil error from
+// Resources() with a message that mentions "not implemented". No infrastructure
+// is required — this test always runs.
+func TestNATSConformance_StubTargets(t *testing.T) {
+	var p providers.Provider = natsprovider.New()
+	cfg := &eventbusv1.ClusterConfig{Version: "2.10", Replicas: 1}
+
+	cases := []struct {
+		target  providers.DeployTarget
+		mention string // substring expected in the error message
+	}{
+		{providers.TargetAWSECS, "aws.ecs"},
+		{providers.TargetAWSEKS, "aws.eks"},
+		{providers.TargetKubernetes, "kubernetes"},
+		{providers.TargetSelfHosted, "self_hosted"},
+	}
+
+	for _, tc := range cases {
+		t.Run(string(tc.target), func(t *testing.T) {
+			res, err := p.Resources(cfg, tc.target)
+			if err == nil {
+				t.Fatalf("Resources(cfg, %q) returned nil error, want stub error", tc.target)
+			}
+			if res != nil {
+				t.Errorf("Resources(cfg, %q) returned non-nil resources with error: %v", tc.target, res)
+			}
+			if !strings.Contains(err.Error(), "not implemented") {
+				t.Errorf("error for %q does not contain 'not implemented': %v", tc.target, err)
+			}
+			if !strings.Contains(err.Error(), tc.mention) {
+				t.Errorf("error for %q does not mention %q: %v", tc.target, tc.mention, err)
+			}
+		})
+	}
 }

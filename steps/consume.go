@@ -39,9 +39,13 @@ func ConsumeHandler(
 		)
 	}
 
+	const maxBatchSize = 1000
 	batch := int(input.GetBatchSize())
 	if batch <= 0 {
 		batch = 1
+	}
+	if batch > maxBatchSize {
+		batch = maxBatchSize
 	}
 
 	nc, err := eventbus.DefaultBusConn()
@@ -49,7 +53,7 @@ func ConsumeHandler(
 		return nil, fmt.Errorf("step.eventbus.consume: get bus connection: %w", err)
 	}
 
-	js, err := nc.JetStream()
+	js, err := nc.JetStream(nats.Context(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("step.eventbus.consume: jetstream context: %w", err)
 	}
@@ -63,7 +67,7 @@ func ConsumeHandler(
 	if err != nil {
 		return nil, fmt.Errorf("step.eventbus.consume: pull subscribe: %w", err)
 	}
-	defer sub.Drain() //nolint:errcheck // best-effort drain on return
+	defer sub.Drain() //nolint:errcheck // best-effort; PullSubscribe is ephemeral per-fetch
 
 	var fetchOpts []nats.PullOpt
 	if mw := input.GetMaxWait(); mw != nil && mw.AsDuration() > 0 {

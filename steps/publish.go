@@ -36,7 +36,7 @@ func PublishHandler(
 		return nil, fmt.Errorf("step.eventbus.publish: get bus connection: %w", err)
 	}
 
-	js, err := nc.JetStream()
+	js, err := nc.JetStream(nats.Context(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("step.eventbus.publish: jetstream context: %w", err)
 	}

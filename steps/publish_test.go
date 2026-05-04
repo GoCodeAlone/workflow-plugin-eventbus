@@ -23,8 +23,10 @@ func TestPublishHandler_EmptySubject(t *testing.T) {
 }
 
 func TestPublishHandler_NoBusRegistered(t *testing.T) {
-	// The steps test binary starts with no modules registered.
-	// This test verifies DefaultBusConn returns a descriptive error.
+	// No cluster is registered in this test's scope. Tests run sequentially
+	// within a package; t.Cleanup from BusRegisteredNoURI fires before this
+	// test starts, so the registry is guaranteed empty when we arrive here.
+	// This test exercises DefaultBusConn's "no bus registered" error path.
 	req := sdk.TypedStepRequest[*emptypb.Empty, *eventbusv1.PublishRequest]{
 		Config: &emptypb.Empty{},
 		Input:  &eventbusv1.PublishRequest{Subject: "test.subject", Payload: []byte("hello")},

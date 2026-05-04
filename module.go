@@ -98,6 +98,15 @@ func RegisterNATSConn(instanceName string, conn *nats.Conn) {
 	natsConnCache[instanceName] = conn
 }
 
+// UnregisterNATSConn removes the cached connection entry for instanceName without
+// closing the connection. Use this in tests that manage the connection's lifetime
+// separately (e.g., via nc.Close() + embedded-server shutdown).
+func UnregisterNATSConn(instanceName string) {
+	connCacheMu.Lock()
+	defer connCacheMu.Unlock()
+	delete(natsConnCache, instanceName)
+}
+
 // GetNATSConn returns the cached *nats.Conn for instanceName, or false if absent.
 func GetNATSConn(instanceName string) (*nats.Conn, bool) {
 	connCacheMu.Lock()

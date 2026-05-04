@@ -232,7 +232,7 @@ func TestSubscribeTrigger_FetchAndFire_CallbackData(t *testing.T) {
 	t.Cleanup(func() { eventbus.UnregisterBusURI(instanceName) })
 	// Pre-populate the NATS connection cache; avoids dialling in the trigger goroutine.
 	eventbus.RegisterNATSConn(instanceName, nc)
-	t.Cleanup(func() { eventbus.UnregisterBusURI(instanceName) })
+	t.Cleanup(func() { eventbus.UnregisterNATSConn(instanceName) })
 
 	// Publish one message with a custom header.
 	js, err := nc.JetStream()
@@ -373,6 +373,7 @@ func TestSubscribeTrigger_FetchLoop_ExitsOnCancel(t *testing.T) {
 	eventbus.RegisterBusURI(instanceName, natsURL)
 	t.Cleanup(func() { eventbus.UnregisterBusURI(instanceName) })
 	eventbus.RegisterNATSConn(instanceName, nc)
+	t.Cleanup(func() { eventbus.UnregisterNATSConn(instanceName) })
 
 	cb := sdk.TriggerCallback(func(string, map[string]any) error { return nil })
 	cfg := &eventbusv1.ConsumerConfig{
@@ -427,6 +428,7 @@ func TestSubscribeTrigger_FetchLoop_RetryOnError(t *testing.T) {
 	eventbus.RegisterBusURI(instanceName, natsURL)
 	t.Cleanup(func() { eventbus.UnregisterBusURI(instanceName) })
 	eventbus.RegisterNATSConn(instanceName, nc)
+	t.Cleanup(func() { eventbus.UnregisterNATSConn(instanceName) })
 
 	var (
 		mu       sync.Mutex

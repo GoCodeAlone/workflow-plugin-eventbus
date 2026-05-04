@@ -113,7 +113,10 @@ func TestClusterModule_StopUnregisters(t *testing.T) {
 		Provider:     "nats",
 		DeployTarget: "digitalocean.app_platform",
 	}
-	m, _ := eventbus.NewClusterModule("bus-stop-unreg", cfg)
+	m, err := eventbus.NewClusterModule("bus-stop-unreg", cfg)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
 	_ = m.Init()
 	_ = m.Stop(context.Background())
 
@@ -164,8 +167,17 @@ func TestClusterModule_InitRegistersURIFromInstanceEnvVar(t *testing.T) {
 }
 
 func TestClusterModule_InitNoURIWhenEnvNotSet(t *testing.T) {
-	os.Unsetenv("NATS_URL")
-	os.Unsetenv("EVENTBUS_BUS_NO_URI_URI")
+	// Unset both vars only for the duration of this test, restoring any
+	// pre-existing value on exit. Bare os.Unsetenv would permanently remove
+	// NATS_URL from the process environment, breaking tests that run after.
+	if prev, ok := os.LookupEnv("NATS_URL"); ok {
+		t.Cleanup(func() { os.Setenv("NATS_URL", prev) })
+		os.Unsetenv("NATS_URL")
+	}
+	if prev, ok := os.LookupEnv("EVENTBUS_BUS_NO_URI_URI"); ok {
+		t.Cleanup(func() { os.Setenv("EVENTBUS_BUS_NO_URI_URI", prev) })
+		os.Unsetenv("EVENTBUS_BUS_NO_URI_URI")
+	}
 
 	cfg := &eventbusv1.ClusterConfig{
 		Provider:     "nats",
@@ -190,7 +202,10 @@ func TestClusterModule_StopEvictsNATSConn(t *testing.T) {
 		Provider:     "nats",
 		DeployTarget: "digitalocean.app_platform",
 	}
-	m, _ := eventbus.NewClusterModule("bus-conn-evict", cfg)
+	m, err := eventbus.NewClusterModule("bus-conn-evict", cfg)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
 	_ = m.Init()
 
 	// Pre-seed with a nil sentinel (nil is safe: closeNATSConn guards against nil).

@@ -108,26 +108,43 @@ func GetNATSConn(instanceName string) (*nats.Conn, bool) {
 // GetOrDialNATSConn returns the cached NATS connection for instanceName, dialing
 // a new one (via natsDialFn) if no live connection is cached. Returns an error if
 // no URI is registered for instanceName or the dial fails.
+//
+// Lock ordering: connCacheMu and urlMu (held inside GetBusURI) are never held
+// simultaneously. The URI lookup happens between the fast-path unlock and the
+// slow-path re-lock so that no nested acquisition is possible.
 func GetOrDialNATSConn(instanceName string) (*nats.Conn, error) {
+	// Fast path: return cached live connection without touching urlMu.
 	connCacheMu.Lock()
-	defer connCacheMu.Unlock()
-
-	if conn, ok := natsConnCache[instanceName]; ok && conn.IsConnected() {
+	conn, cached := natsConnCache[instanceName]
+	if cached && conn != nil && conn.IsConnected() {
+		connCacheMu.Unlock()
 		return conn, nil
 	}
-	// Stale or missing — evict and re-dial.
+	// Evict stale entry (closed or nil) while we hold the lock.
 	delete(natsConnCache, instanceName)
+	connCacheMu.Unlock()
 
-	uri, ok := GetBusURI(instanceName)
-	if !ok || uri == "" {
+	// Slow path: resolve URI with no lock held (avoids connCacheMu→urlMu nesting).
+	uri, uriOk := GetBusURI(instanceName)
+	if !uriOk || uri == "" {
 		key := strings.ToUpper(strings.ReplaceAll(instanceName, "-", "_"))
 		return nil, fmt.Errorf(
 			"infra.eventbus: no URI registered for bus %q; set EVENTBUS_%s_URI or NATS_URL",
 			instanceName, key)
 	}
+
+	// Dial outside any lock — natsDialFn may block for the connection timeout.
 	nc, err := natsDialFn(uri)
 	if err != nil {
 		return nil, fmt.Errorf("infra.eventbus: dial NATS for bus %q at %s: %w", instanceName, uri, err)
+	}
+
+	// Re-acquire to insert; check again for a race where another goroutine dialled first.
+	connCacheMu.Lock()
+	defer connCacheMu.Unlock()
+	if existing, ok := natsConnCache[instanceName]; ok && existing != nil && existing.IsConnected() {
+		nc.Close() // discard the redundant connection we just dialled
+		return existing, nil
 	}
 	natsConnCache[instanceName] = nc
 	return nc, nil

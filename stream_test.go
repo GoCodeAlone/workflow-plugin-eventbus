@@ -101,7 +101,10 @@ func TestStreamModule_StopUnregisters(t *testing.T) {
 		Name:     "BMW_FULFILLMENT",
 		Subjects: []string{"fulfillment.>"},
 	}
-	m, _ := eventbus.NewStreamModule("stream-stop-unreg", cfg)
+	m, err := eventbus.NewStreamModule("stream-stop-unreg", cfg)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
 	_ = m.Init()
 	_ = m.Stop(context.Background())
 

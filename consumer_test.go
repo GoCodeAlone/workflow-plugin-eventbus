@@ -104,7 +104,10 @@ func TestConsumerModule_StopUnregisters(t *testing.T) {
 		Name:       "bmw-fulfillment-handler",
 		StreamName: "BMW_FULFILLMENT",
 	}
-	m, _ := eventbus.NewConsumerModule("consumer-stop-unreg", cfg)
+	m, err := eventbus.NewConsumerModule("consumer-stop-unreg", cfg)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
 	_ = m.Init()
 	_ = m.Stop(context.Background())
 

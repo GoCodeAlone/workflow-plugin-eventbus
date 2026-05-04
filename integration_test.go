@@ -1,34 +1,31 @@
-// Package eventbus_test provides an end-to-end integration test that starts
-// the workflow-plugin-eventbus binary as a real subprocess, communicates with
-// it over the gRPC transport (via go-plugin), and verifies the full typed-proto
-// contract surface: module lifecycle, step execution, contract registry, and
-// trigger module creation.
+// Package eventbus_test provides end-to-end integration tests that start the
+// workflow-plugin-eventbus binary as a real subprocess, communicate with it over
+// the gRPC transport (via go-plugin), and verify the full typed-proto contract
+// surface.
 //
-// The test:
-//  1. Compiles and starts the plugin binary as a subprocess via go-plugin.
-//  2. Fetches the manifest and contract registry over gRPC.
-//  3. Declares an infra.eventbus cluster module (Create → Init → Start → Stop).
-//  4. Creates and attempts to execute step.eventbus.publish — expects a
-//     descriptive error about no URI (no live NATS server required).
-//  5. Creates and attempts to execute step.eventbus.consume — expects a
-//     descriptive error about no consumer registered.
-//  6. Creates and attempts to execute step.eventbus.ack — expects a
-//     descriptive error about empty ack_token.
-//  7. Creates a trigger.eventbus.subscribe module and verifies it can be
-//     initialised and stopped without error.
+// Two test functions:
 //
-// Run with -short to skip (requires the Go toolchain to compile the binary).
+//   - TestE2E_EventbusPluginScenario — always runs; exercises gRPC transport,
+//     manifest, contract registry, module lifecycle, and step error paths
+//     without a live NATS server.
+//
+//   - TestE2E_EventbusPluginScenario_WithNATS — gated on INTEGRATION_NATS=1;
+//     requires a running NATS server with JetStream (NATS_URL env var).
+//     Publishes 10 messages, consumes all 10, and acks each one.
 package eventbus_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	goplugin "github.com/GoCodeAlone/go-plugin"
+	"github.com/nats-io/nats.go"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -76,7 +73,8 @@ func buildBinary(t *testing.T) string {
 }
 
 // startPlugin starts the plugin binary as a go-plugin subprocess and returns a
-// pb.PluginServiceClient connected to it over gRPC.
+// pb.PluginServiceClient connected to it over gRPC. The subprocess inherits the
+// test process's environment (including NATS_URL when set).
 func startPlugin(t *testing.T, binaryPath string) pb.PluginServiceClient {
 	t.Helper()
 
@@ -116,24 +114,54 @@ func mustNoRPCErr(t *testing.T, label string, err error, respErr string) {
 	}
 }
 
-// ── integration scenario ──────────────────────────────────────────────────────
+// ── helper: declare a module over gRPC (Create → Init → Start) ───────────────
 
-// TestE2E_EventbusPluginScenario is the canonical end-to-end integration test.
+// declareModule sends CreateModule → InitModule → StartModule and registers a
+// t.Cleanup that sends StopModule. Returns the module handle.
+func declareModule(t *testing.T, ctx context.Context, pbClient pb.PluginServiceClient, typeName, name string, cfg *anypb.Any) string {
+	t.Helper()
+
+	createResp, err := pbClient.CreateModule(ctx, &pb.CreateModuleRequest{
+		Type:        typeName,
+		Name:        name,
+		TypedConfig: cfg,
+	})
+	mustNoRPCErr(t, fmt.Sprintf("CreateModule(%s)", typeName), err, createResp.GetError())
+	handle := createResp.HandleId
+
+	initResp, err := pbClient.InitModule(ctx, &pb.HandleRequest{HandleId: handle})
+	mustNoRPCErr(t, fmt.Sprintf("InitModule(%s)", typeName), err, initResp.GetError())
+
+	startResp, err := pbClient.StartModule(ctx, &pb.HandleRequest{HandleId: handle})
+	mustNoRPCErr(t, fmt.Sprintf("StartModule(%s)", typeName), err, startResp.GetError())
+
+	t.Cleanup(func() {
+		resp, err := pbClient.StopModule(ctx, &pb.HandleRequest{HandleId: handle})
+		if err != nil {
+			t.Logf("StopModule(%s): gRPC error: %v", typeName, err)
+		} else if resp.GetError() != "" {
+			t.Logf("StopModule(%s): plugin error: %s", typeName, resp.GetError())
+		}
+	})
+
+	return handle
+}
+
+// ── TestE2E_EventbusPluginScenario ───────────────────────────────────────────
+
+// TestE2E_EventbusPluginScenario verifies the full gRPC contract surface without
+// a live NATS server. It always runs (no skip gate).
 //
-// All calls go through real gRPC proto serialisation: the test process packs
-// each request as anypb.Any, sends it over a TCP gRPC connection to the plugin
-// subprocess, and unpacks the typed response.
-//
-// No live NATS server is required — the test deliberately exercises the error
-// paths that fire when no broker is reachable, verifying that error messages
-// are descriptive and the plugin remains stable under those conditions.
-//
-// Requires the Go toolchain to compile the plugin binary. Run with -short to skip.
+// Verifies:
+//   - Manifest name and author
+//   - Contract registry: all 7 strict-proto descriptors present
+//   - infra.eventbus module lifecycle (Create → Init → Start → Stop)
+//   - step.eventbus.publish: descriptive error when no broker URI registered
+//   - step.eventbus.consume: descriptive error when consumer not registered
+//   - step.eventbus.ack: descriptive error when ack_token is empty
+//   - trigger.eventbus.subscribe module lifecycle
+//   - GetModuleTypes / GetStepTypes / GetTriggerTypes RPC coverage
 func TestE2E_EventbusPluginScenario(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test: requires Go toolchain (run without -short)")
-	}
-
 	ctx := context.Background()
 
 	// ── 1. Build and start plugin subprocess ──────────────────────────────────
@@ -154,7 +182,6 @@ func TestE2E_EventbusPluginScenario(t *testing.T) {
 	registry, err := pbClient.GetContractRegistry(ctx, &emptypb.Empty{})
 	mustNoRPCErr(t, "GetContractRegistry", err, "")
 
-	// Collect type names by kind to verify all expected contracts are present.
 	moduleTypes := make(map[string]bool)
 	stepTypes := make(map[string]bool)
 	triggerTypes := make(map[string]bool)
@@ -168,7 +195,6 @@ func TestE2E_EventbusPluginScenario(t *testing.T) {
 			triggerTypes[c.GetTriggerType()] = true
 		}
 	}
-
 	for _, want := range []string{"infra.eventbus", "infra.eventbus.stream", "infra.eventbus.consumer"} {
 		if !moduleTypes[want] {
 			t.Errorf("contract registry missing module type %q", want)
@@ -182,8 +208,6 @@ func TestE2E_EventbusPluginScenario(t *testing.T) {
 	if !triggerTypes["trigger.eventbus.subscribe"] {
 		t.Error("contract registry missing trigger type trigger.eventbus.subscribe")
 	}
-
-	// Verify all step contracts carry strict-proto mode.
 	for _, c := range registry.GetContracts() {
 		if c.GetKind() == pb.ContractKind_CONTRACT_KIND_STEP {
 			if c.GetMode() != pb.ContractMode_CONTRACT_MODE_STRICT_PROTO {
@@ -192,41 +216,17 @@ func TestE2E_EventbusPluginScenario(t *testing.T) {
 		}
 	}
 
-	// ── 4. Declare infra.eventbus cluster module via gRPC ─────────────────────
-	clusterCfg := &eventbusv1.ClusterConfig{
+	// ── 4. Declare infra.eventbus cluster module ──────────────────────────────
+	packedClusterCfg, err := anypb.New(&eventbusv1.ClusterConfig{
 		Provider:     "nats",
 		DeployTarget: "digitalocean.app_platform",
-	}
-	packedClusterCfg, err := anypb.New(clusterCfg)
+	})
 	if err != nil {
 		t.Fatalf("pack ClusterConfig: %v", err)
 	}
-
-	createModResp, err := pbClient.CreateModule(ctx, &pb.CreateModuleRequest{
-		Type:        "infra.eventbus",
-		Name:        "e2e-bus",
-		TypedConfig: packedClusterCfg,
-	})
-	mustNoRPCErr(t, "CreateModule(infra.eventbus)", err, createModResp.GetError())
-	modHandle := createModResp.HandleId
-
-	initResp, err := pbClient.InitModule(ctx, &pb.HandleRequest{HandleId: modHandle})
-	mustNoRPCErr(t, "InitModule", err, initResp.GetError())
-
-	startResp, err := pbClient.StartModule(ctx, &pb.HandleRequest{HandleId: modHandle})
-	mustNoRPCErr(t, "StartModule", err, startResp.GetError())
-
-	t.Cleanup(func() {
-		if resp, err := pbClient.StopModule(ctx, &pb.HandleRequest{HandleId: modHandle}); err != nil {
-			t.Logf("StopModule: gRPC error: %v", err)
-		} else if resp.GetError() != "" {
-			t.Logf("StopModule: plugin error: %s", resp.GetError())
-		}
-	})
+	declareModule(t, ctx, pbClient, "infra.eventbus", "e2e-bus", packedClusterCfg)
 
 	// ── 5. step.eventbus.publish — no broker URI registered ───────────────────
-	// Cluster has no URI (no env var set) → expect a descriptive error from the
-	// plugin, not a gRPC transport error.
 	createPublishResp, err := pbClient.CreateStep(ctx, &pb.CreateStepRequest{
 		Type: "step.eventbus.publish",
 		Name: "e2e-publish",
@@ -234,7 +234,7 @@ func TestE2E_EventbusPluginScenario(t *testing.T) {
 	mustNoRPCErr(t, "CreateStep(publish)", err, createPublishResp.GetError())
 
 	publishInput, err := anypb.New(&eventbusv1.PublishRequest{
-		Subject: "BMW.FULFILLMENT.EVENTS",
+		Subject: "BMW.FULFILLMENT.ORDERS",
 		Payload: []byte(`{"vin":"WBA3A5C50DF456789","status":"ORDER_PLACED"}`),
 	})
 	if err != nil {
@@ -244,7 +244,6 @@ func TestE2E_EventbusPluginScenario(t *testing.T) {
 		HandleId:   createPublishResp.HandleId,
 		TypedInput: publishInput,
 	})
-	// Transport must succeed; the plugin error lives in the response field.
 	if err != nil {
 		t.Fatalf("ExecuteStep(publish): gRPC transport error: %v", err)
 	}
@@ -303,47 +302,28 @@ func TestE2E_EventbusPluginScenario(t *testing.T) {
 	t.Logf("ExecuteStep(ack) expected plugin error: %s", execAckResp.GetError())
 
 	// ── 8. trigger.eventbus.subscribe — module lifecycle ─────────────────────
-	// The trigger is created as a module in the gRPC path. cb is always nil in
-	// the subprocess transport; Start is a no-op.
-	consumerCfg := &eventbusv1.ConsumerConfig{
+	packedConsumerCfg, err := anypb.New(&eventbusv1.ConsumerConfig{
 		Name:       "bmw-fulfillment-handler",
 		StreamName: "BMW_FULFILLMENT",
-	}
-	packedConsumerCfg, err := anypb.New(consumerCfg)
-	if err != nil {
-		t.Fatalf("pack ConsumerConfig: %v", err)
-	}
-
-	createTrigResp, err := pbClient.CreateModule(ctx, &pb.CreateModuleRequest{
-		Type:        "trigger.eventbus.subscribe",
-		Name:        "e2e-trigger",
-		TypedConfig: packedConsumerCfg,
 	})
-	mustNoRPCErr(t, "CreateModule(trigger.eventbus.subscribe)", err, createTrigResp.GetError())
-	trigHandle := createTrigResp.HandleId
-
-	initTrigResp, err := pbClient.InitModule(ctx, &pb.HandleRequest{HandleId: trigHandle})
-	mustNoRPCErr(t, "InitModule(trigger)", err, initTrigResp.GetError())
-
-	startTrigResp, err := pbClient.StartModule(ctx, &pb.HandleRequest{HandleId: trigHandle})
-	mustNoRPCErr(t, "StartModule(trigger)", err, startTrigResp.GetError())
-
-	stopTrigResp, err := pbClient.StopModule(ctx, &pb.HandleRequest{HandleId: trigHandle})
-	mustNoRPCErr(t, "StopModule(trigger)", err, stopTrigResp.GetError())
+	if err != nil {
+		t.Fatalf("pack ConsumerConfig for trigger: %v", err)
+	}
+	declareModule(t, ctx, pbClient, "trigger.eventbus.subscribe", "e2e-trigger", packedConsumerCfg)
 
 	// ── 9. GetModuleTypes / GetStepTypes / GetTriggerTypes ────────────────────
 	modTypes, err := pbClient.GetModuleTypes(ctx, &emptypb.Empty{})
 	mustNoRPCErr(t, "GetModuleTypes", err, "")
-	expectedModTypes := map[string]bool{
-		"infra.eventbus":              false,
-		"infra.eventbus.stream":       false,
-		"infra.eventbus.consumer":     false,
-		"trigger.eventbus.subscribe":  false,
+	wantModTypes := map[string]bool{
+		"infra.eventbus":             false,
+		"infra.eventbus.stream":      false,
+		"infra.eventbus.consumer":    false,
+		"trigger.eventbus.subscribe": false,
 	}
 	for _, typ := range modTypes.GetTypes() {
-		expectedModTypes[typ] = true
+		wantModTypes[typ] = true
 	}
-	for typ, found := range expectedModTypes {
+	for typ, found := range wantModTypes {
 		if !found {
 			t.Errorf("GetModuleTypes: missing %q", typ)
 		}
@@ -351,15 +331,15 @@ func TestE2E_EventbusPluginScenario(t *testing.T) {
 
 	stepTypeList, err := pbClient.GetStepTypes(ctx, &emptypb.Empty{})
 	mustNoRPCErr(t, "GetStepTypes", err, "")
-	expectedStepTypes := map[string]bool{
+	wantStepTypes := map[string]bool{
 		"step.eventbus.publish": false,
 		"step.eventbus.consume": false,
 		"step.eventbus.ack":     false,
 	}
 	for _, typ := range stepTypeList.GetTypes() {
-		expectedStepTypes[typ] = true
+		wantStepTypes[typ] = true
 	}
-	for typ, found := range expectedStepTypes {
+	for typ, found := range wantStepTypes {
 		if !found {
 			t.Errorf("GetStepTypes: missing %q", typ)
 		}
@@ -376,4 +356,204 @@ func TestE2E_EventbusPluginScenario(t *testing.T) {
 	if !hasTrigger {
 		t.Error("GetTriggerTypes: missing trigger.eventbus.subscribe")
 	}
+}
+
+// ── TestE2E_EventbusPluginScenario_WithNATS ───────────────────────────────────
+
+// TestE2E_EventbusPluginScenario_WithNATS exercises the full publish → consume
+// → ack pipeline against a live NATS server with JetStream.
+//
+// Gate: INTEGRATION_NATS=1 must be set. NATS_URL must contain the broker URI.
+//
+// The test:
+//  1. Connects directly to NATS to pre-create the JetStream stream + durable consumer.
+//  2. Builds + starts the plugin binary as a subprocess; the subprocess inherits
+//     NATS_URL from the test process environment, which the infra.eventbus module
+//     resolves during Init.
+//  3. Declares infra.eventbus, infra.eventbus.stream, and infra.eventbus.consumer
+//     modules via gRPC (Create → Init → Start).
+//  4. Publishes 10 messages via step.eventbus.publish.
+//  5. Consumes all 10 in a single batch via step.eventbus.consume (batch_size=10).
+//  6. Acks each message via step.eventbus.ack using the ack_token from the response.
+func TestE2E_EventbusPluginScenario_WithNATS(t *testing.T) {
+	if os.Getenv("INTEGRATION_NATS") != "1" {
+		t.Skip("skipping NATS integration test: set INTEGRATION_NATS=1 and NATS_URL to run")
+	}
+
+	natsURL := os.Getenv("NATS_URL")
+	if natsURL == "" {
+		t.Fatal("INTEGRATION_NATS=1 but NATS_URL is not set")
+	}
+
+	const (
+		streamName    = "BMW_FULFILLMENT"
+		streamSubject = "BMW.FULFILLMENT.>"
+		publishSubj   = "BMW.FULFILLMENT.ORDERS"
+		consumerName  = "bmw-fulfillment-handler"
+		numMessages   = 10
+	)
+
+	ctx := context.Background()
+
+	// ── 1. Pre-create JetStream stream + durable consumer in test process ─────
+	// The stream and consumer modules only register config in the plugin — they
+	// do not provision resources on the broker. We create them directly here so
+	// the publish and consume steps work against a live stream.
+	nc, err := nats.Connect(natsURL, nats.Timeout(10*time.Second))
+	if err != nil {
+		t.Fatalf("connect to NATS at %s: %v", natsURL, err)
+	}
+	t.Cleanup(nc.Close)
+
+	js, err := nc.JetStream()
+	if err != nil {
+		t.Fatalf("JetStream context: %v", err)
+	}
+
+	// Create or update the stream.
+	if _, err := js.StreamInfo(streamName); err != nil {
+		if _, err := js.AddStream(&nats.StreamConfig{
+			Name:     streamName,
+			Subjects: []string{streamSubject},
+		}); err != nil {
+			t.Fatalf("create JetStream stream %q: %v", streamName, err)
+		}
+	}
+	t.Cleanup(func() {
+		if err := js.DeleteStream(streamName); err != nil {
+			t.Logf("delete stream %q: %v", streamName, err)
+		}
+	})
+
+	// Create or update the durable consumer.
+	if _, err := js.ConsumerInfo(streamName, consumerName); err != nil {
+		if _, err := js.AddConsumer(streamName, &nats.ConsumerConfig{
+			Durable:    consumerName,
+			AckPolicy:  nats.AckExplicitPolicy,
+			MaxDeliver: 3,
+		}); err != nil {
+			t.Fatalf("create durable consumer %q: %v", consumerName, err)
+		}
+	}
+
+	// ── 2. Build + start plugin subprocess ────────────────────────────────────
+	// NATS_URL is inherited from the test process environment.
+	binaryPath := buildBinary(t)
+	pbClient := startPlugin(t, binaryPath)
+
+	// ── 3. Declare modules via gRPC ───────────────────────────────────────────
+	packedClusterCfg, err := anypb.New(&eventbusv1.ClusterConfig{
+		Provider:     "nats",
+		DeployTarget: "digitalocean.app_platform",
+	})
+	if err != nil {
+		t.Fatalf("pack ClusterConfig: %v", err)
+	}
+	declareModule(t, ctx, pbClient, "infra.eventbus", "nats-bus", packedClusterCfg)
+
+	packedStreamCfg, err := anypb.New(&eventbusv1.StreamConfig{
+		Name:     streamName,
+		Subjects: []string{streamSubject},
+	})
+	if err != nil {
+		t.Fatalf("pack StreamConfig: %v", err)
+	}
+	declareModule(t, ctx, pbClient, "infra.eventbus.stream", "bmw-fulfillment-stream", packedStreamCfg)
+
+	packedConsumerCfg, err := anypb.New(&eventbusv1.ConsumerConfig{
+		Name:       consumerName,
+		StreamName: streamName,
+	})
+	if err != nil {
+		t.Fatalf("pack ConsumerConfig: %v", err)
+	}
+	declareModule(t, ctx, pbClient, "infra.eventbus.consumer", "bmw-fulfillment-consumer", packedConsumerCfg)
+
+	// ── 4. Publish 10 messages via step.eventbus.publish ─────────────────────
+	createPublishResp, err := pbClient.CreateStep(ctx, &pb.CreateStepRequest{
+		Type: "step.eventbus.publish",
+		Name: "nats-publish",
+	})
+	mustNoRPCErr(t, "CreateStep(publish)", err, createPublishResp.GetError())
+	publishHandle := createPublishResp.HandleId
+
+	for i := 1; i <= numMessages; i++ {
+		publishInput, err := anypb.New(&eventbusv1.PublishRequest{
+			Subject: publishSubj,
+			Payload: []byte(fmt.Sprintf(`{"n":%d,"event":"ORDER_PLACED"}`, i)),
+		})
+		if err != nil {
+			t.Fatalf("pack PublishRequest %d: %v", i, err)
+		}
+		execResp, err := pbClient.ExecuteStep(ctx, &pb.ExecuteStepRequest{
+			HandleId:   publishHandle,
+			TypedInput: publishInput,
+		})
+		mustNoRPCErr(t, fmt.Sprintf("ExecuteStep(publish) msg %d", i), err, execResp.GetError())
+
+		var out eventbusv1.PublishResponse
+		if err := execResp.GetTypedOutput().UnmarshalTo(&out); err != nil {
+			t.Fatalf("unpack PublishResponse msg %d: %v", i, err)
+		}
+		if out.GetSequence() == "" {
+			t.Errorf("publish msg %d: expected non-empty sequence", i)
+		}
+		if out.GetAckedAt() == "" {
+			t.Errorf("publish msg %d: expected non-empty acked_at", i)
+		}
+	}
+
+	// ── 5. Consume all 10 in a single batch via step.eventbus.consume ─────────
+	createConsumeResp, err := pbClient.CreateStep(ctx, &pb.CreateStepRequest{
+		Type: "step.eventbus.consume",
+		Name: "nats-consume",
+	})
+	mustNoRPCErr(t, "CreateStep(consume)", err, createConsumeResp.GetError())
+
+	consumeInput, err := anypb.New(&eventbusv1.ConsumeRequest{
+		Consumer:  consumerName,
+		BatchSize: numMessages,
+	})
+	if err != nil {
+		t.Fatalf("pack ConsumeRequest: %v", err)
+	}
+	execConsumeResp, err := pbClient.ExecuteStep(ctx, &pb.ExecuteStepRequest{
+		HandleId:   createConsumeResp.HandleId,
+		TypedInput: consumeInput,
+	})
+	mustNoRPCErr(t, "ExecuteStep(consume)", err, execConsumeResp.GetError())
+
+	var consumeOut eventbusv1.ConsumeResponse
+	if err := execConsumeResp.GetTypedOutput().UnmarshalTo(&consumeOut); err != nil {
+		t.Fatalf("unpack ConsumeResponse: %v", err)
+	}
+	msgs := consumeOut.GetMessages()
+	if len(msgs) != numMessages {
+		t.Fatalf("consume: got %d messages, want %d", len(msgs), numMessages)
+	}
+
+	// ── 6. Ack each message via step.eventbus.ack ─────────────────────────────
+	createAckResp, err := pbClient.CreateStep(ctx, &pb.CreateStepRequest{
+		Type: "step.eventbus.ack",
+		Name: "nats-ack",
+	})
+	mustNoRPCErr(t, "CreateStep(ack)", err, createAckResp.GetError())
+	ackHandle := createAckResp.HandleId
+
+	for i, msg := range msgs {
+		if msg.GetAckToken() == "" {
+			t.Errorf("message %d: ack_token is empty", i)
+			continue
+		}
+		ackInput, err := anypb.New(&eventbusv1.AckRequest{AckToken: msg.GetAckToken()})
+		if err != nil {
+			t.Fatalf("pack AckRequest for msg %d: %v", i, err)
+		}
+		execAckResp, err := pbClient.ExecuteStep(ctx, &pb.ExecuteStepRequest{
+			HandleId:   ackHandle,
+			TypedInput: ackInput,
+		})
+		mustNoRPCErr(t, fmt.Sprintf("ExecuteStep(ack) msg %d", i), err, execAckResp.GetError())
+	}
+	t.Logf("published %d messages, consumed %d, acked %d", numMessages, len(msgs), len(msgs))
 }

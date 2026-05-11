@@ -14,9 +14,9 @@
     "capabilities": {
         "configProvider": false,
         "moduleTypes": [
-            "infra.eventbus",
-            "infra.eventbus.stream",
-            "infra.eventbus.consumer"
+            "eventbus.broker",
+            "eventbus.stream",
+            "eventbus.consumer"
         ],
         "stepTypes": [
             "step.eventbus.publish",

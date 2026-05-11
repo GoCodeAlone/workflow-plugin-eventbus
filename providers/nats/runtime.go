@@ -303,14 +303,23 @@ func (r *natsRuntime) EnsureConsumer(ctx context.Context, conn providers.Connect
 	}
 }
 
-// Subscribe and Ack land in subsequent commits (Task 4c/4d).
-// For now, stub them so the compile-time RuntimeBroker assertion below
-// succeeds. The stubs return errNotImplemented so any accidental wiring
-// surfaces immediately rather than silently no-opping.
+// Ack lands in commit 4d. For now stub it so the compile-time RuntimeBroker
+// assertion below succeeds; the stub returns errNotImplemented so any
+// accidental wiring surfaces immediately rather than silently no-opping.
 
 // errNotImplemented is the sentinel returned by methods awaiting their
-// own sub-task commit (4c/4d).
-var errNotImplemented = errors.New("nats: not implemented in this commit (see task 4c/4d)")
+// own sub-task commit (4d).
+var errNotImplemented = errors.New("nats: not implemented in this commit (see task 4d)")
+
+// subscribeBatchSize is the per-Fetch batch size used by the Subscribe loop.
+// Matches the existing trigger.go default (one message per fetch) — Group F
+// will reconsider this once pull-vs-push semantics split.
+const subscribeBatchSize = 1
+
+// subscribeMaxWait is the per-Fetch MaxWait cap, mirroring trigger.go's
+// fetchPollInterval so the goroutine wakes at least once per interval to
+// observe ctx cancellation even when the stream is idle.
+const subscribeMaxWait = 2 * time.Second
 
 // Publish publishes a single message to JetStream and returns the
 // broker-assigned sequence number + ack timestamp. Header preservation
@@ -362,9 +371,106 @@ func (r *natsRuntime) Publish(ctx context.Context, conn providers.Connection, re
 	}, nil
 }
 
-// Subscribe — implemented in commit 4c.
+// Subscribe attaches handler to the named durable consumer and blocks until
+// ctx is cancelled or an unrecoverable error occurs. It uses JetStream's
+// pull-based Fetch model in a loop — this is "push-via-fetch" semantics,
+// matching the existing trigger.go path verbatim.
+//
+// The RuntimeBroker.Subscribe signature today (with positional streamName +
+// consumerName) is interim; see providers/runtime.go TODO(Group F) for the
+// planned split into pull (returns one batch) and push (long-lived handler)
+// variants once step factories refactor onto this interface.
+//
+// Per-message contract:
+//   - handler returning nil → m.Ack() (the message is acknowledged on the broker).
+//   - handler returning err  → m.Nak() (the message is redelivered, subject
+//     to ConsumerConfig.max_deliver).
+//
+// Loop termination:
+//   - ctx cancellation exits cleanly between Fetch rounds, returning ctx.Err().
+//   - nats.ErrTimeout (idle fetch) is non-fatal and triggers the next Fetch.
+//   - Any other Fetch error is returned to the caller (no retry inside the
+//     loop; the caller decides whether to retry by calling Subscribe again).
+//
+// Each delivered nats.Msg's Reply subject is exposed on Message.AckToken so
+// downstream callers can pass it to Ack for delayed/explicit acknowledgement
+// (the step.eventbus.consume + step.eventbus.ack pattern). When the handler
+// returns nil we also call m.Ack() directly here — Group B preserves both
+// ack paths (auto-ack via handler nil; manual-ack via AckToken + Ack()) so
+// the structural refactor doesn't break either existing caller.
 func (r *natsRuntime) Subscribe(ctx context.Context, conn providers.Connection, streamName, consumerName string, handler providers.MessageHandler) error {
-	return errNotImplemented
+	nc, err := asNATS(conn)
+	if err != nil {
+		return fmt.Errorf("nats: Subscribe: %w", err)
+	}
+	if streamName == "" {
+		return errors.New("nats: Subscribe: streamName is required")
+	}
+	if consumerName == "" {
+		return errors.New("nats: Subscribe: consumerName is required")
+	}
+	if handler == nil {
+		return errors.New("nats: Subscribe: handler is nil")
+	}
+	js, err := nc.JetStream(natsgo.Context(ctx))
+	if err != nil {
+		return fmt.Errorf("nats: Subscribe: jetstream context: %w", err)
+	}
+	// Empty subject + BindStream identifies the consumer by durable name + stream.
+	sub, err := js.PullSubscribe("", consumerName, natsgo.BindStream(streamName))
+	if err != nil {
+		return fmt.Errorf("nats: Subscribe: pull subscribe: %w", err)
+	}
+	defer func() { _ = sub.Drain() }()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		msgs, fetchErr := sub.Fetch(subscribeBatchSize, natsgo.MaxWait(subscribeMaxWait))
+		if fetchErr != nil {
+			if errors.Is(fetchErr, natsgo.ErrTimeout) {
+				continue // idle, normal
+			}
+			// If ctx was cancelled mid-fetch, surface that instead of the wrapper.
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			return fmt.Errorf("nats: Subscribe: fetch: %w", fetchErr)
+		}
+		for _, m := range msgs {
+			pbMsg := &eventbusv1.Message{
+				Subject:  m.Subject,
+				Payload:  m.Data,
+				AckToken: m.Reply,
+			}
+			if len(m.Header) > 0 {
+				pbMsg.Headers = make(map[string]string, len(m.Header))
+				for k, vals := range m.Header {
+					if len(vals) > 0 {
+						pbMsg.Headers[k] = vals[0]
+					}
+				}
+			}
+			if meta, err := m.Metadata(); err == nil && meta != nil {
+				pbMsg.Sequence = strconv.FormatUint(meta.Sequence.Stream, 10)
+				pbMsg.PublishedAt = meta.Timestamp.UTC().Format(time.RFC3339)
+			}
+			handlerErr := handler(ctx, pbMsg)
+			if handlerErr != nil {
+				if nakErr := m.Nak(); nakErr != nil {
+					// Surface the handler error; nak failure is logged context.
+					return fmt.Errorf("nats: Subscribe: handler: %w (nak also failed: %v)", handlerErr, nakErr)
+				}
+				return fmt.Errorf("nats: Subscribe: handler: %w", handlerErr)
+			}
+			if ackErr := m.Ack(); ackErr != nil {
+				return fmt.Errorf("nats: Subscribe: ack: %w", ackErr)
+			}
+		}
+	}
 }
 
 // Ack — implemented in commit 4d.

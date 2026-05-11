@@ -2,6 +2,8 @@ package nats_test
 
 import (
 	"context"
+	"errors"
+	"strconv"
 	"testing"
 	"time"
 
@@ -413,5 +415,214 @@ func TestNATSRuntime_Publish_EmptySubject(t *testing.T) {
 
 	if _, err := rb.Publish(ctx, conn, &eventbusv1.PublishRequest{}); err == nil {
 		t.Fatal("expected error for empty subject")
+	}
+}
+
+// ── Subscribe ─────────────────────────────────────────────────────────────────
+
+// mkConsumer pre-creates a durable JetStream consumer with explicit-ack policy.
+func mkConsumer(t *testing.T, url, streamName, consumerName string) {
+	t.Helper()
+	nc, err := natsgo.Connect(url)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer nc.Close()
+	js, err := nc.JetStream()
+	if err != nil {
+		t.Fatalf("jetstream: %v", err)
+	}
+	if _, err := js.AddConsumer(streamName, &natsgo.ConsumerConfig{
+		Durable:   consumerName,
+		AckPolicy: natsgo.AckExplicitPolicy,
+	}); err != nil {
+		t.Fatalf("AddConsumer(%q): %v", consumerName, err)
+	}
+}
+
+func TestNATSRuntime_Subscribe_HandlerReceivesMessagesInOrder(t *testing.T) {
+	url := startEmbeddedNATS(t)
+	const (
+		streamName   = "SUB_ORDER"
+		subject      = "SUB_ORDER.events"
+		consumerName = "sub-order-consumer"
+		numMessages  = 3
+	)
+	mkStream(t, url, streamName, subject)
+	mkConsumer(t, url, streamName, consumerName)
+
+	rb := natspkg.NewRuntime()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	conn, err := rb.Connect(ctx, &eventbusv1.ClusterConfig{Provider: "nats", Dsn: url})
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	// Publish 3 messages via the runtime.
+	for i := 1; i <= numMessages; i++ {
+		payload := []byte("msg-" + strconv.Itoa(i))
+		if _, err := rb.Publish(ctx, conn, &eventbusv1.PublishRequest{
+			Subject: subject,
+			Payload: payload,
+		}); err != nil {
+			t.Fatalf("Publish %d: %v", i, err)
+		}
+	}
+
+	received := make(chan *eventbusv1.Message, numMessages)
+	handler := func(_ context.Context, msg *eventbusv1.Message) error {
+		received <- msg
+		return nil
+	}
+
+	subDone := make(chan error, 1)
+	go func() {
+		subDone <- rb.Subscribe(ctx, conn, streamName, consumerName, handler)
+	}()
+
+	// Collect numMessages messages.
+	got := make([]*eventbusv1.Message, 0, numMessages)
+	timeout := time.After(10 * time.Second)
+	for len(got) < numMessages {
+		select {
+		case m := <-received:
+			got = append(got, m)
+		case <-timeout:
+			t.Fatalf("only received %d/%d messages within 10s", len(got), numMessages)
+		}
+	}
+
+	// Cancel and wait for Subscribe to return.
+	cancel()
+	select {
+	case err := <-subDone:
+		// ctx.Canceled is the expected exit cause.
+		if err != nil && err != context.Canceled {
+			t.Fatalf("Subscribe returned unexpected error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Subscribe did not return within 5s of cancel")
+	}
+
+	// Verify order + payloads + ack_token.
+	for i, m := range got {
+		want := "msg-" + strconv.Itoa(i+1)
+		if string(m.GetPayload()) != want {
+			t.Errorf("message %d payload = %q, want %q", i, m.GetPayload(), want)
+		}
+		if m.GetAckToken() == "" {
+			t.Errorf("message %d: ack_token is empty (expected JetStream reply subject)", i)
+		}
+		if m.GetSubject() != subject {
+			t.Errorf("message %d subject = %q, want %q", i, m.GetSubject(), subject)
+		}
+	}
+}
+
+func TestNATSRuntime_Subscribe_ExitsOnCtxCancel(t *testing.T) {
+	url := startEmbeddedNATS(t)
+	const (
+		streamName   = "SUB_CANCEL"
+		subject      = "SUB_CANCEL.events"
+		consumerName = "sub-cancel-consumer"
+	)
+	mkStream(t, url, streamName, subject)
+	mkConsumer(t, url, streamName, consumerName)
+
+	rb := natspkg.NewRuntime()
+	ctx, cancel := context.WithCancel(context.Background())
+	conn, err := rb.Connect(ctx, &eventbusv1.ClusterConfig{Provider: "nats", Dsn: url})
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	handler := func(context.Context, *eventbusv1.Message) error { return nil }
+
+	subDone := make(chan error, 1)
+	go func() {
+		subDone <- rb.Subscribe(ctx, conn, streamName, consumerName, handler)
+	}()
+
+	// No messages will arrive — give Subscribe a moment to enter its idle loop,
+	// then cancel and ensure it exits promptly.
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-subDone:
+		if err != nil && err != context.Canceled {
+			t.Fatalf("Subscribe returned %v, want nil or context.Canceled", err)
+		}
+	case <-time.After(subscribeReturnBudget):
+		t.Fatal("Subscribe did not exit within budget after ctx cancel")
+	}
+}
+
+// subscribeReturnBudget is the upper bound for Subscribe's exit latency after
+// ctx cancel — one Fetch cycle (subscribeMaxWait inside runtime.go is 2s) plus
+// margin for the goroutine to wake.
+const subscribeReturnBudget = 5 * time.Second
+
+func TestNATSRuntime_Subscribe_HandlerErrorNaks(t *testing.T) {
+	url := startEmbeddedNATS(t)
+	const (
+		streamName   = "SUB_NAK"
+		subject      = "SUB_NAK.events"
+		consumerName = "sub-nak-consumer"
+	)
+	mkStream(t, url, streamName, subject)
+	// Create a consumer with MaxDeliver=2 so a nak'd message redelivers exactly
+	// once more before the broker stops retrying.
+	nc, err := natsgo.Connect(url)
+	if err != nil {
+		t.Fatalf("setup connect: %v", err)
+	}
+	defer nc.Close()
+	js, err := nc.JetStream()
+	if err != nil {
+		t.Fatalf("setup jetstream: %v", err)
+	}
+	if _, err := js.AddConsumer(streamName, &natsgo.ConsumerConfig{
+		Durable:    consumerName,
+		AckPolicy:  natsgo.AckExplicitPolicy,
+		MaxDeliver: 2,
+		AckWait:    250 * time.Millisecond, // short so the redelivery happens quickly
+	}); err != nil {
+		t.Fatalf("AddConsumer: %v", err)
+	}
+
+	rb := natspkg.NewRuntime()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	conn, err := rb.Connect(ctx, &eventbusv1.ClusterConfig{Provider: "nats", Dsn: url})
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	if _, err := rb.Publish(ctx, conn, &eventbusv1.PublishRequest{
+		Subject: subject,
+		Payload: []byte("will-nak"),
+	}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	// Handler returns an error on first delivery → Subscribe returns the
+	// wrapped error after issuing m.Nak(). The broker will redeliver but our
+	// Subscribe call has already returned, so we just verify the error path.
+	handlerErr := errors.New("handler-deliberate-fail")
+	handler := func(context.Context, *eventbusv1.Message) error { return handlerErr }
+
+	gotErr := rb.Subscribe(ctx, conn, streamName, consumerName, handler)
+	if gotErr == nil {
+		t.Fatal("expected Subscribe to surface handler error, got nil")
+	}
+	if !errors.Is(gotErr, handlerErr) {
+		t.Errorf("Subscribe error chain missing handler error: %v", gotErr)
 	}
 }

@@ -9,6 +9,7 @@ import (
 
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	natsgo "github.com/nats-io/nats.go"
+	"google.golang.org/protobuf/types/known/durationpb"
 
 	eventbusv1 "github.com/GoCodeAlone/workflow-plugin-eventbus/gen"
 	natspkg "github.com/GoCodeAlone/workflow-plugin-eventbus/providers/nats"
@@ -722,5 +723,115 @@ func TestNATSRuntime_Ack_NoRedeliveryAfterAck(t *testing.T) {
 	_, err = sub.Fetch(1, natsgo.MaxWait(750*time.Millisecond))
 	if !errors.Is(err, natsgo.ErrTimeout) {
 		t.Fatalf("expected nats.ErrTimeout on second Fetch (no redelivery), got: %v", err)
+	}
+}
+
+// ── Consume ───────────────────────────────────────────────────────────────────
+
+// TestNATSRuntime_Consume_ReturnsBatch verifies that Consume binds to the
+// existing durable consumer, fetches up to batch_size already-published
+// messages, and returns them with ack_tokens set to the NATS reply subject.
+func TestNATSRuntime_Consume_ReturnsBatch(t *testing.T) {
+	url := startEmbeddedNATS(t)
+	const (
+		streamName   = "CONSUME_BATCH"
+		subject      = "CONSUME_BATCH.events"
+		consumerName = "consume-batch-handler"
+		numMessages  = 3
+	)
+	mkStream(t, url, streamName, subject)
+	mkConsumer(t, url, streamName, consumerName)
+
+	// Publish numMessages so the consumer has work waiting.
+	pubNC, err := natsgo.Connect(url)
+	if err != nil {
+		t.Fatalf("publisher connect: %v", err)
+	}
+	defer pubNC.Close()
+	pubJS, err := pubNC.JetStream()
+	if err != nil {
+		t.Fatalf("publisher jetstream: %v", err)
+	}
+	for i := 0; i < numMessages; i++ {
+		if _, err := pubJS.Publish(subject, []byte(strconv.Itoa(i))); err != nil {
+			t.Fatalf("publish %d: %v", i, err)
+		}
+	}
+
+	rb := natspkg.NewRuntime()
+	ctx := context.Background()
+	conn, err := rb.Connect(ctx, &eventbusv1.ClusterConfig{Provider: "nats", Dsn: url})
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	resp, err := rb.Consume(ctx, conn, streamName, &eventbusv1.ConsumeRequest{
+		Consumer:  consumerName,
+		BatchSize: int32(numMessages),
+		MaxWait:   durationpb.New(2 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("Consume: %v", err)
+	}
+	if got := len(resp.GetMessages()); got != numMessages {
+		t.Fatalf("Consume returned %d messages, want %d", got, numMessages)
+	}
+	for i, m := range resp.GetMessages() {
+		if m.GetAckToken() == "" {
+			t.Errorf("message %d: ack_token is empty", i)
+		}
+		if m.GetSubject() != subject {
+			t.Errorf("message %d: subject = %q, want %q", i, m.GetSubject(), subject)
+		}
+	}
+}
+
+// TestNATSRuntime_Consume_EmptyTimeout verifies that Consume returns an empty
+// batch (not an error) when no messages are available within max_wait.
+func TestNATSRuntime_Consume_EmptyTimeout(t *testing.T) {
+	url := startEmbeddedNATS(t)
+	const (
+		streamName   = "CONSUME_EMPTY"
+		subject      = "CONSUME_EMPTY.events"
+		consumerName = "consume-empty-handler"
+	)
+	mkStream(t, url, streamName, subject)
+	mkConsumer(t, url, streamName, consumerName)
+
+	rb := natspkg.NewRuntime()
+	ctx := context.Background()
+	conn, err := rb.Connect(ctx, &eventbusv1.ClusterConfig{Provider: "nats", Dsn: url})
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	resp, err := rb.Consume(ctx, conn, streamName, &eventbusv1.ConsumeRequest{
+		Consumer:  consumerName,
+		BatchSize: 5,
+		MaxWait:   durationpb.New(250 * time.Millisecond),
+	})
+	if err != nil {
+		t.Fatalf("Consume: %v", err)
+	}
+	if got := len(resp.GetMessages()); got != 0 {
+		t.Fatalf("Consume returned %d messages, want 0", got)
+	}
+}
+
+// TestNATSRuntime_Consume_EmptyConsumer rejects requests with no consumer name.
+func TestNATSRuntime_Consume_EmptyConsumer(t *testing.T) {
+	url := startEmbeddedNATS(t)
+	rb := natspkg.NewRuntime()
+	ctx := context.Background()
+	conn, err := rb.Connect(ctx, &eventbusv1.ClusterConfig{Provider: "nats", Dsn: url})
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	if _, err := rb.Consume(ctx, conn, "any-stream", &eventbusv1.ConsumeRequest{}); err == nil {
+		t.Fatal("expected error for empty consumer name")
 	}
 }

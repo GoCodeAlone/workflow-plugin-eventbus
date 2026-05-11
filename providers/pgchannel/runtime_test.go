@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/types/known/durationpb"
+
 	eventbusv1 "github.com/GoCodeAlone/workflow-plugin-eventbus/gen"
 	"github.com/GoCodeAlone/workflow-plugin-eventbus/providers"
 	pgchannel "github.com/GoCodeAlone/workflow-plugin-eventbus/providers/pgchannel"
@@ -469,6 +471,146 @@ func TestPGRuntime_EnsureStream_RejectsUnsafeNames(t *testing.T) {
 		}); err != nil {
 			t.Errorf("EnsureStream(%q) = %v, want nil", name, err)
 		}
+	}
+}
+
+// ── Consume ────────────────────────────────────────────────────────────────
+
+// TestPGRuntime_Consume_ReturnsBatch verifies that Consume fetches up to
+// batch_size events for the named consumer and returns them with valid
+// ack_tokens (the "<stream>:<consumer>:<id>" format).
+func TestPGRuntime_Consume_ReturnsBatch(t *testing.T) {
+	ctx, rb, conn := startPG(t)
+	const (
+		stream   = "consume_batch"
+		consumer = "consume_batch_c"
+		numMsgs  = 3
+	)
+	if err := rb.EnsureStream(ctx, conn, &eventbusv1.StreamConfig{
+		Name: stream, Subjects: []string{"cb.>"},
+	}); err != nil {
+		t.Fatalf("EnsureStream: %v", err)
+	}
+	if err := rb.EnsureConsumer(ctx, conn, stream, &eventbusv1.ConsumerConfig{
+		Name: consumer, MaxDeliver: 5,
+	}); err != nil {
+		t.Fatalf("EnsureConsumer: %v", err)
+	}
+	for i := 0; i < numMsgs; i++ {
+		if _, err := rb.Publish(ctx, conn, &eventbusv1.PublishRequest{
+			Subject: "cb.x", Payload: []byte(strconv.Itoa(i)),
+		}); err != nil {
+			t.Fatalf("Publish %d: %v", i, err)
+		}
+	}
+
+	resp, err := rb.Consume(ctx, conn, stream, &eventbusv1.ConsumeRequest{
+		Consumer:  consumer,
+		BatchSize: numMsgs,
+		MaxWait:   durationpb.New(2 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("Consume: %v", err)
+	}
+	if got := len(resp.GetMessages()); got != numMsgs {
+		t.Fatalf("Consume returned %d messages, want %d", got, numMsgs)
+	}
+	wantPrefix := stream + ":" + consumer + ":"
+	for i, m := range resp.GetMessages() {
+		if m.GetAckToken() == "" {
+			t.Errorf("message %d: ack_token is empty", i)
+			continue
+		}
+		if !contains(m.GetAckToken(), wantPrefix) {
+			t.Errorf("message %d: ack_token = %q, want prefix %q", i, m.GetAckToken(), wantPrefix)
+		}
+	}
+}
+
+// TestPGRuntime_Consume_EmptyTimeout verifies that Consume returns an empty
+// batch (not an error) when no rows arrive within max_wait.
+func TestPGRuntime_Consume_EmptyTimeout(t *testing.T) {
+	ctx, rb, conn := startPG(t)
+	const (
+		stream   = "consume_empty"
+		consumer = "consume_empty_c"
+	)
+	if err := rb.EnsureStream(ctx, conn, &eventbusv1.StreamConfig{
+		Name: stream, Subjects: []string{"ce.>"},
+	}); err != nil {
+		t.Fatalf("EnsureStream: %v", err)
+	}
+	if err := rb.EnsureConsumer(ctx, conn, stream, &eventbusv1.ConsumerConfig{
+		Name: consumer, MaxDeliver: 5,
+	}); err != nil {
+		t.Fatalf("EnsureConsumer: %v", err)
+	}
+
+	resp, err := rb.Consume(ctx, conn, stream, &eventbusv1.ConsumeRequest{
+		Consumer:  consumer,
+		BatchSize: 5,
+		MaxWait:   durationpb.New(500 * time.Millisecond),
+	})
+	if err != nil {
+		t.Fatalf("Consume: %v", err)
+	}
+	if got := len(resp.GetMessages()); got != 0 {
+		t.Fatalf("Consume returned %d messages, want 0", got)
+	}
+}
+
+// TestPGRuntime_Consume_AckAdvancesPosition verifies the full pull → ack
+// roundtrip: Consume returns a row + ack_token, Ack advances position past
+// that id, and a follow-up Consume sees no rows.
+func TestPGRuntime_Consume_AckAdvancesPosition(t *testing.T) {
+	ctx, rb, conn := startPG(t)
+	const (
+		stream   = "consume_ack"
+		consumer = "consume_ack_c"
+	)
+	if err := rb.EnsureStream(ctx, conn, &eventbusv1.StreamConfig{
+		Name: stream, Subjects: []string{"ca.>"},
+	}); err != nil {
+		t.Fatalf("EnsureStream: %v", err)
+	}
+	if err := rb.EnsureConsumer(ctx, conn, stream, &eventbusv1.ConsumerConfig{
+		Name: consumer, MaxDeliver: 5,
+	}); err != nil {
+		t.Fatalf("EnsureConsumer: %v", err)
+	}
+	if _, err := rb.Publish(ctx, conn, &eventbusv1.PublishRequest{
+		Subject: "ca.x", Payload: []byte("p"),
+	}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	resp, err := rb.Consume(ctx, conn, stream, &eventbusv1.ConsumeRequest{
+		Consumer:  consumer,
+		BatchSize: 1,
+		MaxWait:   durationpb.New(2 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("Consume: %v", err)
+	}
+	if len(resp.GetMessages()) != 1 {
+		t.Fatalf("Consume: got %d messages, want 1", len(resp.GetMessages()))
+	}
+
+	if err := rb.Ack(ctx, conn, resp.GetMessages()[0].GetAckToken()); err != nil {
+		t.Fatalf("Ack: %v", err)
+	}
+
+	// Second Consume must return empty: position advanced past the row.
+	resp2, err := rb.Consume(ctx, conn, stream, &eventbusv1.ConsumeRequest{
+		Consumer:  consumer,
+		BatchSize: 1,
+		MaxWait:   durationpb.New(250 * time.Millisecond),
+	})
+	if err != nil {
+		t.Fatalf("Consume 2: %v", err)
+	}
+	if got := len(resp2.GetMessages()); got != 0 {
+		t.Fatalf("Consume after ack: got %d messages, want 0", got)
 	}
 }
 

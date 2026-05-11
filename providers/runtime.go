@@ -10,9 +10,9 @@
 //   - module.streamModule   (EnsureStream)
 //   - module.consumerModule (EnsureConsumer)
 //   - steps/publish.go      (Publish)
-//   - steps/consume.go      (Subscribe — pull semantics)
+//   - steps/consume.go      (Consume — bounded-batch pull semantics)
 //   - steps/ack.go          (Ack)
-//   - trigger.go            (Subscribe — push semantics)
+//   - trigger.go            (Subscribe — long-lived push handler)
 package providers
 
 import (
@@ -50,13 +50,34 @@ type RuntimeBroker interface {
 	// handler acks the message; returning an error naks it (delivery counted
 	// against max_deliver per ConsumerConfig).
 	//
-	// TODO(Group F): this signature conflates pull semantics (step.eventbus.consume,
-	// which wants a bounded batch + max_wait) with push semantics (trigger.eventbus.subscribe,
-	// which wants a long-lived blocking handler loop). Split into Subscribe (push)
-	// and Pull (returns *ConsumeResponse for a single batch) when step factories
-	// are refactored. Also: take *ConsumeRequest instead of streamName+consumerName
-	// positional args (review I2).
+	// Subscribe is the long-lived "push" path used by trigger.eventbus.subscribe.
+	// For bounded-batch pull semantics (step.eventbus.consume — return up to
+	// batch_size messages bounded by max_wait, then return) use Consume instead.
 	Subscribe(ctx context.Context, conn Connection, streamName, consumerName string, handler MessageHandler) error
+
+	// Consume returns up to req.batch_size already-delivered messages from the
+	// durable consumer named req.consumer on the named stream, blocking at
+	// most req.max_wait for the batch to fill. Returns an empty
+	// ConsumeResponse when no messages are available within max_wait (NOT an
+	// error).
+	//
+	// Each returned Message.ack_token is opaque to callers and must be passed
+	// back through Ack (typically via step.eventbus.ack) to acknowledge the
+	// message. Implementations choose the token format (NATS reply subject,
+	// "<stream>:<consumer>:<id>" for pgchannel, etc.).
+	//
+	// streamName is passed positionally (rather than embedded in req) because
+	// the proto ConsumeRequest does not carry stream identity; callers
+	// (typically step.eventbus.consume) resolve it from the registered
+	// ConsumerConfig before dispatching here, mirroring the EnsureConsumer
+	// shape.
+	//
+	// Consume is the bounded-pull counterpart to Subscribe: it does not
+	// register a long-lived handler — each call sets up + tears down whatever
+	// fetch infrastructure the provider needs, returns a single batch, and
+	// exits. This separation per Group A's TODO cleanly splits pull
+	// (step.eventbus.consume) from push (trigger.eventbus.subscribe).
+	Consume(ctx context.Context, conn Connection, streamName string, req *eventbusv1.ConsumeRequest) (*eventbusv1.ConsumeResponse, error)
 
 	// Ack acknowledges a previously delivered message identified by ackToken
 	// (Message.ack_token). Used by step.eventbus.ack for explicit-ack flows.

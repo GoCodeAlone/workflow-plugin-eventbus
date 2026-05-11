@@ -41,6 +41,9 @@ func (mockRuntime) Publish(_ context.Context, _ providers.Connection, _ *eventbu
 func (mockRuntime) Subscribe(_ context.Context, _ providers.Connection, _ string, _ string, _ providers.MessageHandler) error {
 	return errors.New("mockRuntime: Subscribe not expected in registry tests")
 }
+func (mockRuntime) Consume(_ context.Context, _ providers.Connection, _ string, _ *eventbusv1.ConsumeRequest) (*eventbusv1.ConsumeResponse, error) {
+	return nil, errors.New("mockRuntime: Consume not expected in registry tests")
+}
 func (mockRuntime) Ack(_ context.Context, _ providers.Connection, _ string) error {
 	return errors.New("mockRuntime: Ack not expected in registry tests")
 }

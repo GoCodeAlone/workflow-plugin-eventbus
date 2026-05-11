@@ -465,6 +465,87 @@ func (r *natsRuntime) Subscribe(ctx context.Context, conn providers.Connection, 
 	}
 }
 
+// Consume binds to the named durable consumer on streamName and fetches up
+// to req.batch_size messages, blocking at most req.max_wait for the batch
+// to fill. This is the bounded-pull counterpart to Subscribe: each call
+// creates a fresh PullSubscribe, issues one Fetch, and tears the
+// subscription down before returning — there is no long-lived handler loop.
+//
+// nats.ErrTimeout (idle fetch with no messages) is normalised to an empty
+// ConsumeResponse rather than surfaced as an error; this matches the legacy
+// step.eventbus.consume behaviour where an empty batch is the steady-state
+// "no work yet" outcome.
+//
+// Each returned Message.ack_token carries the NATS reply subject so the
+// caller can ack via Ack(ctx, conn, ackToken) — the same explicit-ack path
+// that step.eventbus.ack uses.
+func (r *natsRuntime) Consume(ctx context.Context, conn providers.Connection, streamName string, req *eventbusv1.ConsumeRequest) (*eventbusv1.ConsumeResponse, error) {
+	nc, err := asNATS(conn)
+	if err != nil {
+		return nil, fmt.Errorf("nats: Consume: %w", err)
+	}
+	if req == nil {
+		return nil, errors.New("nats: Consume: req is nil")
+	}
+	if streamName == "" {
+		return nil, errors.New("nats: Consume: streamName is required")
+	}
+	if req.GetConsumer() == "" {
+		return nil, errors.New("nats: Consume: consumer is required")
+	}
+	const maxBatchSize = 1000
+	batch := int(req.GetBatchSize())
+	if batch <= 0 {
+		batch = 1
+	}
+	if batch > maxBatchSize {
+		batch = maxBatchSize
+	}
+	js, err := nc.JetStream(natsgo.Context(ctx))
+	if err != nil {
+		return nil, fmt.Errorf("nats: Consume: jetstream context: %w", err)
+	}
+	// Empty subject + BindStream identifies the consumer by durable name.
+	// PullSubscribe creates an ephemeral subscription bound to the existing
+	// durable; the subscription itself is per-call and Drain'd before return.
+	sub, err := js.PullSubscribe("", req.GetConsumer(), natsgo.BindStream(streamName))
+	if err != nil {
+		return nil, fmt.Errorf("nats: Consume: pull subscribe: %w", err)
+	}
+	defer func() { _ = sub.Drain() }()
+
+	var fetchOpts []natsgo.PullOpt
+	if mw := req.GetMaxWait(); mw != nil && mw.AsDuration() > 0 {
+		fetchOpts = append(fetchOpts, natsgo.MaxWait(mw.AsDuration()))
+	}
+	msgs, err := sub.Fetch(batch, fetchOpts...)
+	if err != nil && !errors.Is(err, natsgo.ErrTimeout) {
+		return nil, fmt.Errorf("nats: Consume: fetch: %w", err)
+	}
+	out := make([]*eventbusv1.Message, 0, len(msgs))
+	for _, m := range msgs {
+		pbMsg := &eventbusv1.Message{
+			Subject:  m.Subject,
+			Payload:  m.Data,
+			AckToken: m.Reply,
+		}
+		if len(m.Header) > 0 {
+			pbMsg.Headers = make(map[string]string, len(m.Header))
+			for k, vals := range m.Header {
+				if len(vals) > 0 {
+					pbMsg.Headers[k] = vals[0]
+				}
+			}
+		}
+		if meta, err := m.Metadata(); err == nil && meta != nil {
+			pbMsg.Sequence = strconv.FormatUint(meta.Sequence.Stream, 10)
+			pbMsg.PublishedAt = meta.Timestamp.UTC().Format(time.RFC3339)
+		}
+		out = append(out, pbMsg)
+	}
+	return &eventbusv1.ConsumeResponse{Messages: out}, nil
+}
+
 // Ack acknowledges a previously delivered JetStream message identified by
 // ackToken. The token is the NATS reply subject (Message.AckToken from
 // Subscribe / step.eventbus.consume); publishing an empty payload to that

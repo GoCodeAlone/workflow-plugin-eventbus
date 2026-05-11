@@ -625,6 +625,107 @@ func isSafeIdentifier(s string) bool {
 	return true
 }
 
+// Consume fetches up to req.batch_size events for the durable consumer
+// named req.consumer on streamName, blocking at most req.max_wait for the
+// first row to arrive when the consumer is otherwise idle. Returns an
+// empty ConsumeResponse when no rows are available within max_wait.
+//
+// Semantics differ from Subscribe:
+//   - No advisory lock is taken (Consume is a single-shot call, not a
+//     long-lived subscription). Concurrent Consume callers compete for the
+//     same rows under FOR UPDATE SKIP LOCKED inside pollOnce; the row
+//     locks release at transaction end, so once Consume returns each
+//     fetched row is unlocked.
+//   - Position is NOT advanced inside Consume. The caller advances
+//     position via Ack (passing the ack_token returned per Message).
+//     This is the explicit-ack contract that mirrors NATS JetStream's
+//     reply-subject ack pattern.
+//   - delivery_count IS incremented for every returned row, so dead-letter
+//     enforcement (max_deliver) still applies even when Consume is called
+//     repeatedly without intervening Acks.
+//
+// When max_wait is positive and the first pollOnce returns empty, Consume
+// retries with the same poll cadence as Subscribe (poll → sleep(pc.PollInterval)
+// → poll …) until either rows arrive or max_wait elapses. This matches the
+// JetStream semantics of "block up to max_wait for at least one message".
+func (r *runtime) Consume(ctx context.Context, conn providers.Connection, streamName string, req *eventbusv1.ConsumeRequest) (*eventbusv1.ConsumeResponse, error) {
+	pc, err := asPG(conn)
+	if err != nil {
+		return nil, fmt.Errorf("pgchannel: Consume: %w", err)
+	}
+	if req == nil {
+		return nil, errors.New("pgchannel: Consume: req is nil")
+	}
+	if streamName == "" {
+		return nil, errors.New("pgchannel: Consume: streamName is required")
+	}
+	if req.GetConsumer() == "" {
+		return nil, errors.New("pgchannel: Consume: consumer is required")
+	}
+	const maxBatchSize = 1000
+	batch := int(req.GetBatchSize())
+	if batch <= 0 {
+		batch = 1
+	}
+	if batch > maxBatchSize {
+		batch = maxBatchSize
+	}
+
+	// max_wait bounds total time spent waiting for the first row. If 0/unset,
+	// a single pollOnce is performed and an empty batch is returned promptly.
+	var deadline time.Time
+	if mw := req.GetMaxWait(); mw != nil && mw.AsDuration() > 0 {
+		deadline = time.Now().Add(mw.AsDuration())
+	}
+
+	for {
+		position, filter, _, err := loadConsumerState(ctx, pc, streamName, req.GetConsumer())
+		if err != nil {
+			return nil, fmt.Errorf("pgchannel: Consume: %w", err)
+		}
+		rows, err := pollOnce(ctx, pc, streamName, filter, position, batch)
+		if err != nil {
+			return nil, fmt.Errorf("pgchannel: Consume: %w", err)
+		}
+		if len(rows) > 0 {
+			out := make([]*eventbusv1.Message, 0, len(rows))
+			for _, row := range rows {
+				// Track delivery count so max_deliver still bounds replay
+				// under repeated Consume-without-Ack patterns. We do not
+				// gate the return on count > max_deliver here — that
+				// dead-letter enforcement is Subscribe's responsibility,
+				// where it can advance position on dead-letter. Consume
+				// returns whatever pollOnce yielded; max_deliver still
+				// applies to Subscribe-side delivery.
+				if _, err := incrementDeliveryCount(ctx, pc, streamName, req.GetConsumer(), row.ID); err != nil {
+					return nil, fmt.Errorf("pgchannel: Consume: %w", err)
+				}
+				msg, err := rowToMessage(streamName, req.GetConsumer(), row)
+				if err != nil {
+					return nil, fmt.Errorf("pgchannel: Consume: %w", err)
+				}
+				out = append(out, msg)
+			}
+			return &eventbusv1.ConsumeResponse{Messages: out}, nil
+		}
+		// No rows yet — return empty if max_wait is unset/elapsed, else sleep
+		// and re-poll. Use pc.PollInterval as the inter-poll cadence to match
+		// Subscribe semantics.
+		if deadline.IsZero() || !time.Now().Before(deadline) {
+			return &eventbusv1.ConsumeResponse{Messages: nil}, nil
+		}
+		sleep := pc.PollInterval()
+		if remaining := time.Until(deadline); remaining < sleep {
+			sleep = remaining
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(sleep):
+		}
+	}
+}
+
 // Ack parses ackToken as "<stream>:<consumer>:<id>" and advances the
 // consumer's position cursor past id, scoped to the named stream.
 //

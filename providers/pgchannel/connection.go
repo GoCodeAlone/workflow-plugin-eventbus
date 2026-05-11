@@ -62,9 +62,11 @@ type Connection struct {
 }
 
 // OpenConnection opens a new pgxpool.Pool against dsn and returns a
-// pgchannel.Connection. maxConns caps the pool size; pass 0 to accept the
-// package default (4 — sized for the expected handful of poller / LISTEN /
-// publish goroutines per pod).
+// pgchannel.Connection. maxConns caps the pool size; pass 0 (or any
+// non-positive value) to accept the package default (defaultMaxConns, 16 —
+// sized so a handful of Subscribe consumers each holding 2 connections
+// (advisory lock + LISTEN) plus Publish/Ack/Ensure transients fit without
+// pool exhaustion).
 //
 // The returned Connection is safe for concurrent use; Close releases the
 // underlying pool.

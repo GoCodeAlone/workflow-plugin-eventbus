@@ -328,8 +328,12 @@ type ClusterConfig struct {
 	Kinesis *KinesisConfig `protobuf:"bytes,7,opt,name=kinesis,proto3" json:"kinesis,omitempty"`
 	// limits sets compute/storage resource limits for the cluster containers.
 	Limits *ResourceLimits `protobuf:"bytes,8,opt,name=limits,proto3" json:"limits,omitempty"`
-	// dsn is the Postgres DSN for the pg-backed provider (required when provider=pgchannel).
-	// Ignored for non-pgchannel providers.
+	// dsn is the provider-specific connection string for the runtime broker:
+	//   - provider="pgchannel": Postgres DSN (required).
+	//   - provider="nats":      NATS URL (e.g., "nats://host:4222"); when empty
+	//     falls back to env-resolved URIs in busURIRegistry
+	//     (legacy NATS_URL / EVENTBUS_<NAME>_URI flow).
+	//   - other providers:      ignored.
 	Dsn string `protobuf:"bytes,10,opt,name=dsn,proto3" json:"dsn,omitempty"`
 	// poll_interval is the polling fallback interval for the pg-backed provider
 	// (Go duration string, default "1s"). Ignored for non-pgchannel providers.

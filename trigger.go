@@ -144,8 +144,19 @@ func (t *subscribeTrigger) Stop(_ context.Context) error {
 // returning an error (broker not registered yet, dial failure, etc.) it pauses
 // triggerRetryDelay and re-dispatches; this preserves the prior fetchLoop's
 // "keep retrying until the bus is up" behaviour through the new abstraction.
+//
+// Allocation note: a single *time.Timer is reused across retry iterations
+// (Reset between sleeps, drained before Reset to handle the rare-but-
+// possible fire-before-drain race). time.After would allocate a fresh
+// Timer + channel on every failed Subscribe, which compounds when the
+// broker is wedged for an extended period.
 func (t *subscribeTrigger) subscribeLoop(ctx context.Context) {
 	defer close(t.done)
+	timer := time.NewTimer(triggerRetryDelay)
+	if !timer.Stop() {
+		<-timer.C
+	}
+	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -161,11 +172,16 @@ func (t *subscribeTrigger) subscribeLoop(ctx context.Context) {
 			return
 		}
 		// Pause before retrying so a wedged broker (e.g., not-yet-started)
-		// doesn't spin the goroutine.
+		// doesn't spin the goroutine. Reset the shared timer rather than
+		// allocating a fresh time.After channel on each iteration.
+		timer.Reset(triggerRetryDelay)
 		select {
 		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
 			return
-		case <-time.After(triggerRetryDelay):
+		case <-timer.C:
 		}
 	}
 }

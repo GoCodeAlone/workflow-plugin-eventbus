@@ -90,9 +90,10 @@ func UnregisterBusURI(instanceName string) {
 // LookupRuntime to get the runtime + cached Connection.
 //
 // Registration happens in `Start`; the degraded-mode nats branch registers
-// with nil runtime/conn to preserve the LookupRuntime → "not yet started"
-// contract. Removal happens in `Stop`. Lookups before Start return "not yet
-// started" so callers see a clear lifecycle error rather than a nil deref.
+// with nil runtime/conn to preserve the LookupRuntime → "runtime not
+// initialized" contract. Removal happens in `Stop`. Lookups before Start
+// return "runtime not initialized" with provider-specific remediation
+// guidance so callers see a clear lifecycle error rather than a nil deref.
 var brokerInstanceRegistry sync.Map // string → *clusterModule
 
 // RegisterBrokerInstance stores m under name. Exported so integration tests
@@ -135,9 +136,20 @@ func LookupRuntime(name string) (providers.RuntimeBroker, providers.Connection, 
 	m.mu.RLock()
 	rt := m.runtime
 	conn := m.conn
+	provider := m.config.GetProvider()
 	m.mu.RUnlock()
 	if rt == nil || conn == nil {
-		return nil, nil, fmt.Errorf("eventbus.broker %q: not yet started (runtime/conn nil)", name)
+		// Distinguish "Start hasn't run yet" from "Start ran but skipped
+		// Connect because no DSN/URI was available" so operators know
+		// whether to fix module ordering or fix the cluster config.
+		switch provider {
+		case "nats":
+			return nil, nil, fmt.Errorf("eventbus.broker %q (provider=nats): runtime not initialized — Start either has not run yet or skipped Connect because no broker URL was available; set ClusterConfig.dsn, the EVENTBUS_%s_URI env var, or NATS_URL", name, name)
+		case "pgchannel":
+			return nil, nil, fmt.Errorf("eventbus.broker %q (provider=pgchannel): runtime not initialized — Start either has not run yet or failed; set ClusterConfig.dsn (Postgres DSN) and verify Start completed without error", name)
+		default:
+			return nil, nil, fmt.Errorf("eventbus.broker %q (provider=%q): runtime not initialized — Start either has not run yet or skipped Connect", name, provider)
+		}
 	}
 	return rt, conn, nil
 }
@@ -464,10 +476,12 @@ func (m *clusterModule) Init() error {
 //	original m.config pointer (already published via RegisterCluster in
 //	Init) is never mutated.
 //
-// Step factories and the trigger module still use the legacy
-// nats.Conn-direct path (GetOrDialNATSConn, RegisterNATSConn, etc.) until
-// Group F refactors them onto LookupRuntime — that is intentional and
-// preserves backward compatibility during the staged migration.
+// Step factories and the trigger module now dispatch through
+// LookupRuntimeWithFallback + the RuntimeBroker interface (Group F shipped
+// in this PR). The legacy nats.Conn-direct helpers (GetOrDialNATSConn,
+// RegisterNATSConn, etc.) remain exported because the nats provider's
+// RuntimeBroker implementation reuses them internally — callers outside
+// providers/nats should not use them.
 func (m *clusterModule) Start(ctx context.Context) error {
 	provider := m.config.GetProvider()
 	// Resolve DSN into a local without touching m.config so that callers
@@ -484,13 +498,12 @@ func (m *clusterModule) Start(ctx context.Context) error {
 				dsn = uri
 			}
 		}
-		// Legacy degraded mode: when no DSN/URI is available at Start time
+		// Degraded mode: when no DSN/URI is available at Start time
 		// (the IaC-only / plan-apply flow + tests that exercise the missing-
-		// URI error path) skip Connect and leave runtime/conn nil. Legacy
-		// steps/trigger paths continue using GetOrDialNATSConn which surfaces
-		// the missing-URI error at execution time with the same message.
-		// LookupRuntime will return "not yet started" so any Group F caller
-		// migrated to the runtime sees a clear error rather than a nil deref.
+		// URI error path) skip Connect and leave runtime/conn nil.
+		// LookupRuntime returns "runtime not initialized" with provider-
+		// specific remediation guidance so steps/trigger callers see a clear
+		// error rather than a nil deref at execution time.
 		if dsn == "" {
 			RegisterBrokerInstance(m.instanceName, m)
 			return nil
@@ -525,8 +538,8 @@ func (m *clusterModule) Start(ctx context.Context) error {
 //  1. unregister the broker instance so new LookupRuntime calls fail fast;
 //  2. close the runtime Connection (best-effort — errors are non-fatal but
 //     logged via the returned error chain when nothing else fails);
-//  3. close + evict any legacy nats.Conn cached for the instance (preserves
-//     Group A/B compatibility for steps/triggers that have not yet migrated);
+//  3. close + evict any legacy nats.Conn cached for the instance (the
+//     providers/nats RuntimeBroker reuses this cache internally);
 //  4. drop the legacy bus URI + cluster config from the global registries.
 //
 // Stop is safe to call when Start never ran (runtime/conn nil) — the runtime
@@ -534,8 +547,8 @@ func (m *clusterModule) Start(ctx context.Context) error {
 func (m *clusterModule) Stop(_ context.Context) error {
 	UnregisterBrokerInstance(m.instanceName)
 	// Snapshot conn under the write lock and clear both fields so any
-	// concurrent LookupRuntime read sees a clean "not yet started" state
-	// rather than a runtime paired with a closed conn. The actual Close
+	// concurrent LookupRuntime read sees a clean "runtime not initialized"
+	// state rather than a runtime paired with a closed conn. The actual Close
 	// call happens *outside* the lock — Close can be slow (network round
 	// trip, pgx pool drain) and we don't want to block LookupRuntime
 	// readers behind it.

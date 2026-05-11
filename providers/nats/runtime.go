@@ -1,24 +1,16 @@
 // Package nats — providers.RuntimeBroker implementation backed by nats-go.
 //
-// This file extracts the NATS-specific publish/subscribe/ensure logic
-// previously inlined in steps/publish.go, steps/consume.go, steps/ack.go,
-// and trigger.go into a single Provider-shaped struct that satisfies the
-// providers.RuntimeBroker contract.
+// This file holds the NATS-specific publish/subscribe/ensure logic as a
+// single Provider-shaped struct that satisfies the providers.RuntimeBroker
+// contract. Step factories (steps/*.go) and the trigger module (trigger.go)
+// dispatch through this RuntimeBroker via LookupRuntimeWithFallback +
+// providers.RuntimeBroker so they never reach into nats-go directly.
 //
-// The extraction is structural only — same nats-go calls, same semantics,
-// just relocated. steps/*.go and trigger.go are NOT modified in this PR;
-// they continue calling nats-go directly. Group F refactors them to dispatch
-// through the broker registry.
-//
-// URL resolution note (Group B deviation):
-//
-//	The plan references ClusterConfig.GetUrl(), but the proto currently
-//	exposes only ClusterConfig.GetDsn() (documented as "Postgres DSN" for
-//	the pgchannel provider). For the runtime layer we widen the meaning of
-//	dsn to "broker connection string" so the same field carries the NATS
-//	URL when provider="nats". This avoids a proto change inside Group B
-//	(structural refactor only); a dedicated url field can land alongside
-//	the steps/trigger refactor in Group F if desired.
+// URL resolution: ClusterConfig.dsn is the canonical connection string for
+// every provider — Postgres DSN for pgchannel, NATS URL for nats. See the
+// proto comment on ClusterConfig.dsn for the full per-provider semantics.
+// The runtime layer therefore reads cfg.Dsn unconditionally as the broker
+// URL; no provider-specific field switch is required.
 package nats
 
 import (

@@ -70,8 +70,11 @@ func TestBrokerInstanceRegistry_RegisterLookup(t *testing.T) {
 }
 
 // TestLookupRuntime_NotStarted: a registered module whose Start has not yet
-// run (runtime/conn still nil) must surface a "not yet started" error rather
-// than returning a nil runtime that callers would dereference.
+// run (runtime/conn still nil) must surface a "runtime not initialized"
+// error rather than returning a nil runtime that callers would dereference.
+// The error must also include remediation guidance so operators don't
+// misdiagnose it as a module ordering issue when the real cause is a
+// missing DSN/URL.
 func TestLookupRuntime_NotStarted(t *testing.T) {
 	cm := &clusterModule{instanceName: "not-started-bus"} // runtime + conn nil
 	RegisterBrokerInstance(cm.instanceName, cm)
@@ -81,8 +84,8 @@ func TestLookupRuntime_NotStarted(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for not-yet-started broker")
 	}
-	if !strings.Contains(err.Error(), "not yet started") {
-		t.Errorf("error = %q, want substring \"not yet started\"", err.Error())
+	if !strings.Contains(err.Error(), "runtime not initialized") {
+		t.Errorf("error = %q, want substring \"runtime not initialized\"", err.Error())
 	}
 }
 
@@ -163,7 +166,7 @@ func TestClusterModule_StartStopConcurrentLookup(t *testing.T) {
 				}
 				rt, conn, err := LookupRuntime(cm.instanceName)
 				if err != nil {
-					// "not yet started" or "not registered" — both fine.
+					// "runtime not initialized" or "not registered" — both fine.
 					continue
 				}
 				if rt == nil || conn == nil {

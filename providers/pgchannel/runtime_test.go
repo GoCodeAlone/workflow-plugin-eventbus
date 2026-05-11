@@ -435,6 +435,43 @@ func TestPGRuntime_Ack_MalformedToken(t *testing.T) {
 	}
 }
 
+// TestPGRuntime_EnsureStream_RejectsUnsafeNames pins the upstream guard:
+// stream names containing characters outside [a-zA-Z0-9_] are rejected
+// at EnsureStream rather than deep inside runListenSession. Without
+// this guard, a bad name (e.g. "BMW-Fulfillment") would create a stream
+// row whose Subscribe would fail isSafeIdentifier on every reconnect,
+// spinning the LISTEN loop forever.
+func TestPGRuntime_EnsureStream_RejectsUnsafeNames(t *testing.T) {
+	ctx, rb, conn := startPG(t)
+	bad := []string{
+		"BMW-Fulfillment",   // hyphen
+		"stream.with.dots",  // dots
+		"stream name",       // space
+		"stream;DROP TABLE", // SQL injection attempt
+		"stream$",           // dollar
+		"",                  // empty
+	}
+	for _, name := range bad {
+		err := rb.EnsureStream(ctx, conn, &eventbusv1.StreamConfig{
+			Name:     name,
+			Subjects: []string{"x.>"},
+		})
+		if err == nil {
+			t.Errorf("EnsureStream(%q) = nil, want validation error", name)
+		}
+	}
+	// Valid names still accepted.
+	good := []string{"bmw_fulfillment", "Stream1", "UPPER_CASE_OK", "s"}
+	for _, name := range good {
+		if err := rb.EnsureStream(ctx, conn, &eventbusv1.StreamConfig{
+			Name:     name,
+			Subjects: []string{name + ".>"},
+		}); err != nil {
+			t.Errorf("EnsureStream(%q) = %v, want nil", name, err)
+		}
+	}
+}
+
 // ── helpers ────────────────────────────────────────────────────────────────
 
 func mustParseInt64(t *testing.T, s string) int64 {

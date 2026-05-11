@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -93,6 +94,28 @@ func (r *runtime) Connect(ctx context.Context, cfg *eventbusv1.ClusterConfig) (p
 	return conn, nil
 }
 
+// streamNamePattern restricts stream names to the identifier characters
+// that pg_notify channels accept without quoting + folding ambiguity.
+// Enforced at EnsureStream so unsafe names are rejected at creation rather
+// than causing the LISTEN session to fail repeatedly inside runListenLoop.
+var streamNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
+
+// validateStreamName rejects names containing characters that would
+// trip the isSafeIdentifier guard inside the LISTEN goroutine. Without
+// this boundary check, a bad name (e.g. "BMW-Fulfillment") creates a
+// stream row but every Subscribe against it fails fast in runListenLoop
+// and the loop reconnects every PollInterval forever, churning the
+// connection pool. Reject upstream so the misuse is visible immediately.
+func validateStreamName(name string) error {
+	if name == "" {
+		return fmt.Errorf("pgchannel: stream name is required")
+	}
+	if !streamNamePattern.MatchString(name) {
+		return fmt.Errorf("pgchannel: stream name %q must match [a-zA-Z0-9_]+ (pg_notify channel name constraint)", name)
+	}
+	return nil
+}
+
 // EnsureStream upserts the eventbus_streams row for cfg. Idempotent: a
 // repeat call with the same config is a no-op (UPDATE with same values).
 //
@@ -106,8 +129,8 @@ func (r *runtime) EnsureStream(ctx context.Context, conn providers.Connection, c
 	if cfg == nil {
 		return errors.New("pgchannel: EnsureStream: cfg is nil")
 	}
-	if cfg.GetName() == "" {
-		return errors.New("pgchannel: EnsureStream: cfg.name is required")
+	if err := validateStreamName(cfg.GetName()); err != nil {
+		return err
 	}
 	if len(cfg.GetSubjects()) == 0 {
 		return fmt.Errorf("pgchannel: EnsureStream: stream %q has no subjects; at least one subject filter is required", cfg.GetName())

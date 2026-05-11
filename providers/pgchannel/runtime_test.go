@@ -330,7 +330,7 @@ func TestPGRuntime_Ack_AdvancesPosition(t *testing.T) {
 		t.Fatalf("Publish: %v", err)
 	}
 
-	token := consumer + ":" + resp.GetSequence()
+	token := stream + ":" + consumer + ":" + resp.GetSequence()
 	if err := rb.Ack(ctx, conn, token); err != nil {
 		t.Fatalf("Ack: %v", err)
 	}
@@ -345,6 +345,73 @@ func TestPGRuntime_Ack_AdvancesPosition(t *testing.T) {
 	}
 }
 
+// TestPGRuntime_Ack_CrossStreamIsolation pins the schema-PK fix: the
+// (stream_name, name) primary key on eventbus_consumers means a consumer
+// name is NOT globally unique. Acking c1@s1 must NOT advance c1@s2.
+// Pre-fix, AckToken was "<consumer>:<id>" and Ack matched on name alone
+// → cross-stream pollution. AckToken now includes stream as the first
+// component and Ack filters on stream_name AND name.
+func TestPGRuntime_Ack_CrossStreamIsolation(t *testing.T) {
+	ctx, rb, conn := startPG(t)
+	const consumer = "shared_name"
+	const streamA = "iso_a"
+	const streamB = "iso_b"
+
+	// Two streams, same consumer name on each.
+	for _, s := range []string{streamA, streamB} {
+		if err := rb.EnsureStream(ctx, conn, &eventbusv1.StreamConfig{
+			Name: s, Subjects: []string{s + ".>"},
+		}); err != nil {
+			t.Fatalf("EnsureStream %s: %v", s, err)
+		}
+		if err := rb.EnsureConsumer(ctx, conn, s, &eventbusv1.ConsumerConfig{
+			Name:       consumer,
+			MaxDeliver: 5,
+			AckPolicy:  eventbusv1.AckPolicy_ACK_POLICY_EXPLICIT,
+		}); err != nil {
+			t.Fatalf("EnsureConsumer %s: %v", s, err)
+		}
+	}
+
+	// Publish one event to streamA and ack it via streamA's token.
+	resp, err := rb.Publish(ctx, conn, &eventbusv1.PublishRequest{
+		Subject: streamA + ".x", Payload: []byte("p"),
+	})
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	id := mustParseInt64(t, resp.GetSequence())
+
+	tokenA := streamA + ":" + consumer + ":" + resp.GetSequence()
+	if err := rb.Ack(ctx, conn, tokenA); err != nil {
+		t.Fatalf("Ack streamA: %v", err)
+	}
+
+	// streamA's consumer should have advanced; streamB's must be untouched.
+	pc := conn.(*pgchannel.Connection)
+	var posA, posB int64
+	if err := pc.Pool().QueryRow(ctx, "SELECT position FROM eventbus_consumers WHERE stream_name = $1 AND name = $2", streamA, consumer).Scan(&posA); err != nil {
+		t.Fatalf("read posA: %v", err)
+	}
+	if err := pc.Pool().QueryRow(ctx, "SELECT position FROM eventbus_consumers WHERE stream_name = $1 AND name = $2", streamB, consumer).Scan(&posB); err != nil {
+		t.Fatalf("read posB: %v", err)
+	}
+	if posA != id {
+		t.Errorf("streamA consumer position = %d, want %d", posA, id)
+	}
+	if posB != 0 {
+		t.Errorf("streamB consumer position = %d, want 0 (cross-stream pollution!)", posB)
+	}
+
+	// Acking a token for a stream that does not own that consumer must
+	// fail with a "not found" error rather than silently no-oping or
+	// advancing the wrong row.
+	bogusToken := "nonexistent_stream:" + consumer + ":" + resp.GetSequence()
+	if err := rb.Ack(ctx, conn, bogusToken); err == nil {
+		t.Error("expected error acking on stream that owns no such consumer")
+	}
+}
+
 func TestPGRuntime_Ack_MalformedToken(t *testing.T) {
 	ctx, rb, conn := startPG(t)
 	if err := rb.Ack(ctx, conn, "no-colon-here"); err == nil {
@@ -353,8 +420,18 @@ func TestPGRuntime_Ack_MalformedToken(t *testing.T) {
 	if err := rb.Ack(ctx, conn, ""); err == nil {
 		t.Fatal("expected error for empty ack token")
 	}
-	if err := rb.Ack(ctx, conn, "consumer:notanumber"); err == nil {
+	// Two-part token (legacy "<consumer>:<id>") is now malformed — the
+	// 3-element format is required to scope acks to a stream.
+	if err := rb.Ack(ctx, conn, "consumer:42"); err == nil {
+		t.Fatal("expected error for 2-part legacy token (want <stream>:<consumer>:<id>)")
+	}
+	// 3-part token with non-numeric id.
+	if err := rb.Ack(ctx, conn, "stream:consumer:notanumber"); err == nil {
 		t.Fatal("expected error for non-numeric id")
+	}
+	// Empty stream component.
+	if err := rb.Ack(ctx, conn, ":consumer:42"); err == nil {
+		t.Fatal("expected error for empty stream component")
 	}
 }
 

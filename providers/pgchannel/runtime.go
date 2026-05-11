@@ -6,8 +6,8 @@
 // per-stream channel; Subscribe acquires a per-consumer advisory lock,
 // spawns a LISTEN goroutine, and runs a polling loop that delivers events
 // through the MessageHandler with at-least-once semantics + max_deliver
-// enforcement; Ack parses the "<consumer>:<id>" token and advances the
-// consumer cursor.
+// enforcement; Ack parses the "<stream>:<consumer>:<id>" token and
+// advances the consumer cursor scoped to that stream.
 package pgchannel
 
 import (
@@ -318,16 +318,19 @@ func (r *runtime) Publish(ctx context.Context, conn providers.Connection, req *e
 	}, nil
 }
 
-// rowToMessage converts an EventRow + consumer name into the proto Message
-// emitted by Subscribe. The ack_token format is "<consumer>:<id>" — Ack
-// parses it back out via splitN(":", 2).
-func rowToMessage(consumer string, r EventRow) (*eventbusv1.Message, error) {
+// rowToMessage converts an EventRow + stream + consumer name into the proto
+// Message emitted by Subscribe. The ack_token format is
+// "<stream>:<consumer>:<id>" — Ack parses it back out via SplitN(":", 3).
+// Stream is included so Ack can scope its UPDATE to the correct
+// eventbus_consumers row when the same consumer name is reused across
+// streams (the schema PK is (stream_name, name), not just name).
+func rowToMessage(stream, consumer string, r EventRow) (*eventbusv1.Message, error) {
 	msg := &eventbusv1.Message{
 		Subject:     r.Subject,
 		Payload:     append([]byte(nil), r.Payload...),
 		Sequence:    strconv.FormatInt(r.ID, 10),
 		PublishedAt: r.Ts.UTC().Format(time.RFC3339),
-		AckToken:    consumer + ":" + strconv.FormatInt(r.ID, 10),
+		AckToken:    stream + ":" + consumer + ":" + strconv.FormatInt(r.ID, 10),
 	}
 	if len(r.Headers) > 0 {
 		hdrs := map[string]string{}
@@ -473,7 +476,7 @@ func pollAndDeliver(ctx context.Context, pc *Connection, streamName, consumerNam
 			}
 			continue
 		}
-		msg, err := rowToMessage(consumerName, row)
+		msg, err := rowToMessage(streamName, consumerName, row)
 		if err != nil {
 			return err
 		}
@@ -596,10 +599,13 @@ func isSafeIdentifier(s string) bool {
 	return true
 }
 
-// Ack parses ackToken as "<consumer>:<id>" and advances the consumer's
-// position cursor past id. The stream name is looked up from the
-// eventbus_consumers row (there is exactly one row per (stream, consumer)
-// PK; consumer names are unique within a stream).
+// Ack parses ackToken as "<stream>:<consumer>:<id>" and advances the
+// consumer's position cursor past id, scoped to the named stream.
+//
+// The schema PK on eventbus_consumers is (stream_name, name) — consumer
+// names are NOT globally unique. Including stream in the token ensures
+// Ack updates exactly the row that issued the message, even when the same
+// consumer name is reused across streams.
 //
 // Used by step.eventbus.ack for explicit-ack flows. The Subscribe loop's
 // own auto-advance bypasses Ack entirely; this path exists only for
@@ -612,28 +618,25 @@ func (r *runtime) Ack(ctx context.Context, conn providers.Connection, ackToken s
 	if ackToken == "" {
 		return errors.New("pgchannel: Ack: ackToken is required")
 	}
-	consumer, idStr, ok := strings.Cut(ackToken, ":")
-	if !ok || consumer == "" || idStr == "" {
-		return fmt.Errorf("pgchannel: Ack: malformed ackToken %q (want \"<consumer>:<id>\")", ackToken)
+	parts := strings.SplitN(ackToken, ":", 3)
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return fmt.Errorf("pgchannel: Ack: malformed ackToken %q (want \"<stream>:<consumer>:<id>\")", ackToken)
 	}
+	stream, consumer, idStr := parts[0], parts[1], parts[2]
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		return fmt.Errorf("pgchannel: Ack: parse id from %q: %w", ackToken, err)
 	}
 
-	// Resolve the stream from the consumer name. If a consumer name is
-	// reused across streams (the schema permits it), Ack updates ALL
-	// matching rows in one query — caller is responsible for unique
-	// naming across streams to avoid that scenario.
 	tag, err := pc.pool.Exec(ctx,
-		"UPDATE eventbus_consumers SET position = greatest(position, $1) WHERE name = $2",
-		id, consumer,
+		"UPDATE eventbus_consumers SET position = greatest(position, $1) WHERE stream_name = $2 AND name = $3",
+		id, stream, consumer,
 	)
 	if err != nil {
 		return fmt.Errorf("pgchannel: Ack: update: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("pgchannel: Ack: consumer %q not found", consumer)
+		return fmt.Errorf("pgchannel: Ack: consumer %q on stream %q not found", consumer, stream)
 	}
 	return nil
 }

@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"google.golang.org/protobuf/types/known/anypb"
 
 	eventbusv1 "github.com/GoCodeAlone/workflow-plugin-eventbus/gen"
+	"github.com/GoCodeAlone/workflow-plugin-eventbus/providers"
 	sdk "github.com/GoCodeAlone/workflow/plugin/external/sdk"
 )
 
@@ -102,8 +104,41 @@ func (m *streamModule) Init() error {
 	return nil
 }
 
-// Start is a no-op for the stream module.
-func (m *streamModule) Start(_ context.Context) error { return nil }
+// Start resolves the broker named by m.config.BrokerRef via LookupRuntime and
+// dispatches EnsureStream on the runtime so the stream exists before any
+// producer publishes to it. The lookup is wrapped in a bounded-retry loop
+// (10-second budget) because modular's Start phase has no guaranteed ordering
+// between broker and stream modules — the broker may finish Start a few
+// hundred microseconds after the stream's Start begins.
+//
+// Legacy compat: configs without broker_ref skip the dispatch entirely and
+// keep behaving as registered-only (Init populated the global registry).
+// This is the transitional shape; Group F refactors the step + trigger code
+// to require broker_ref and the legacy path will be removed at that point.
+func (m *streamModule) Start(ctx context.Context) error {
+	brokerRef := m.config.GetBrokerRef()
+	if brokerRef == "" {
+		return nil
+	}
+	var (
+		rb   providers.RuntimeBroker
+		conn providers.Connection
+	)
+	if err := retryWithBackoff(ctx, 10*time.Second, func() error {
+		var lookupErr error
+		rb, conn, lookupErr = LookupRuntime(brokerRef)
+		return lookupErr
+	}); err != nil {
+		return fmt.Errorf(
+			"infra.eventbus.stream %q: broker %q not available within 10s: %w",
+			m.instanceName, brokerRef, err,
+		)
+	}
+	if err := rb.EnsureStream(ctx, conn, m.config); err != nil {
+		return fmt.Errorf("infra.eventbus.stream %q: ensure: %w", m.instanceName, err)
+	}
+	return nil
+}
 
 // Stop unregisters the stream config from the global registry.
 func (m *streamModule) Stop(_ context.Context) error {

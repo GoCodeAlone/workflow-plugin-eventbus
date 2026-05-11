@@ -303,14 +303,6 @@ func (r *natsRuntime) EnsureConsumer(ctx context.Context, conn providers.Connect
 	}
 }
 
-// Ack lands in commit 4d. For now stub it so the compile-time RuntimeBroker
-// assertion below succeeds; the stub returns errNotImplemented so any
-// accidental wiring surfaces immediately rather than silently no-opping.
-
-// errNotImplemented is the sentinel returned by methods awaiting their
-// own sub-task commit (4d).
-var errNotImplemented = errors.New("nats: not implemented in this commit (see task 4d)")
-
 // subscribeBatchSize is the per-Fetch batch size used by the Subscribe loop.
 // Matches the existing trigger.go default (one message per fetch) — Group F
 // will reconsider this once pull-vs-push semantics split.
@@ -473,9 +465,47 @@ func (r *natsRuntime) Subscribe(ctx context.Context, conn providers.Connection, 
 	}
 }
 
-// Ack — implemented in commit 4d.
+// Ack acknowledges a previously delivered JetStream message identified by
+// ackToken. The token is the NATS reply subject (Message.AckToken from
+// Subscribe / step.eventbus.consume); publishing an empty payload to that
+// subject is the standard JetStream explicit-ack pattern — same mechanism
+// as steps/ack.go.
+//
+// ctx cancellation is observed via natsgo.Context on the publish RPC so an
+// Ack call cannot block indefinitely on a wedged connection.
 func (r *natsRuntime) Ack(ctx context.Context, conn providers.Connection, ackToken string) error {
-	return errNotImplemented
+	nc, err := asNATS(conn)
+	if err != nil {
+		return fmt.Errorf("nats: Ack: %w", err)
+	}
+	if ackToken == "" {
+		return errors.New("nats: Ack: ackToken is required")
+	}
+	// nc.Publish does not accept a context; use a RequestWithContext-style guard
+	// by checking ctx before the call. nc.Publish is fire-and-forget and returns
+	// quickly (it only enqueues into the client write buffer), so ctx cancel
+	// during the publish itself is not a practical concern.
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("nats: Ack: %w", err)
+	}
+	if err := nc.Publish(ackToken, nil); err != nil {
+		return fmt.Errorf("nats: Ack: publish ack: %w", err)
+	}
+	// Flush so the ack reaches the broker before Ack returns; otherwise the
+	// caller could observe a stale "not yet acked" state. Prefer the
+	// context-aware flush when ctx has a deadline; otherwise fall back to the
+	// nats-go default timeout (nc.Flush()) — FlushWithContext rejects a
+	// deadline-less context with "nats: context requires a deadline".
+	if _, deadlined := ctx.Deadline(); deadlined {
+		if err := nc.FlushWithContext(ctx); err != nil {
+			return fmt.Errorf("nats: Ack: flush: %w", err)
+		}
+	} else {
+		if err := nc.Flush(); err != nil {
+			return fmt.Errorf("nats: Ack: flush: %w", err)
+		}
+	}
+	return nil
 }
 
 // Compile-time assertion that natsRuntime satisfies providers.RuntimeBroker.

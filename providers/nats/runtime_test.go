@@ -626,3 +626,101 @@ func TestNATSRuntime_Subscribe_HandlerErrorNaks(t *testing.T) {
 		t.Errorf("Subscribe error chain missing handler error: %v", gotErr)
 	}
 }
+
+// ── Ack ───────────────────────────────────────────────────────────────────────
+
+func TestNATSRuntime_Ack_EmptyToken(t *testing.T) {
+	url := startEmbeddedNATS(t)
+	rb := natspkg.NewRuntime()
+	ctx := context.Background()
+	conn, err := rb.Connect(ctx, &eventbusv1.ClusterConfig{Provider: "nats", Dsn: url})
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	if err := rb.Ack(ctx, conn, ""); err == nil {
+		t.Fatal("expected error for empty ackToken")
+	}
+}
+
+// TestNATSRuntime_Ack_NoRedeliveryAfterAck verifies the end-to-end flow:
+//  1. Publish one message.
+//  2. Pull-fetch it via a side-channel subscriber to capture the reply subject.
+//  3. Call rb.Ack(token).
+//  4. Pull-fetch again with a short MaxWait — must time out (no redelivery).
+func TestNATSRuntime_Ack_NoRedeliveryAfterAck(t *testing.T) {
+	url := startEmbeddedNATS(t)
+	const (
+		streamName   = "ACK_NORE"
+		subject      = "ACK_NORE.events"
+		consumerName = "ack-nore-consumer"
+	)
+	mkStream(t, url, streamName, subject)
+	// Consumer with explicit ack policy and a short AckWait so we can detect
+	// no-redelivery quickly.
+	nc, err := natsgo.Connect(url)
+	if err != nil {
+		t.Fatalf("setup connect: %v", err)
+	}
+	defer nc.Close()
+	js, err := nc.JetStream()
+	if err != nil {
+		t.Fatalf("setup jetstream: %v", err)
+	}
+	if _, err := js.AddConsumer(streamName, &natsgo.ConsumerConfig{
+		Durable:   consumerName,
+		AckPolicy: natsgo.AckExplicitPolicy,
+		AckWait:   500 * time.Millisecond,
+	}); err != nil {
+		t.Fatalf("AddConsumer: %v", err)
+	}
+
+	rb := natspkg.NewRuntime()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	conn, err := rb.Connect(ctx, &eventbusv1.ClusterConfig{Provider: "nats", Dsn: url})
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	if _, err := rb.Publish(ctx, conn, &eventbusv1.PublishRequest{
+		Subject: subject,
+		Payload: []byte("ack-me"),
+	}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	// Side-channel: pull-fetch the message to capture m.Reply as ack token.
+	sub, err := js.PullSubscribe("", consumerName, natsgo.BindStream(streamName))
+	if err != nil {
+		t.Fatalf("PullSubscribe: %v", err)
+	}
+	t.Cleanup(func() { _ = sub.Drain() })
+
+	msgs, err := sub.Fetch(1, natsgo.MaxWait(5*time.Second))
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("Fetch: got %d messages, want 1", len(msgs))
+	}
+	ackToken := msgs[0].Reply
+	if ackToken == "" {
+		t.Fatal("captured message has empty Reply (ack token)")
+	}
+
+	// Ack via the runtime.
+	if err := rb.Ack(ctx, conn, ackToken); err != nil {
+		t.Fatalf("Ack: %v", err)
+	}
+
+	// Wait longer than AckWait so the broker would have redelivered an
+	// un-acked message; then fetch again — must time out.
+	time.Sleep(1 * time.Second)
+	_, err = sub.Fetch(1, natsgo.MaxWait(750*time.Millisecond))
+	if !errors.Is(err, natsgo.ErrTimeout) {
+		t.Fatalf("expected nats.ErrTimeout on second Fetch (no redelivery), got: %v", err)
+	}
+}

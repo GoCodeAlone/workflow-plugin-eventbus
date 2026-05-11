@@ -25,6 +25,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
+	"time"
 
 	natsgo "github.com/nats-io/nats.go"
 
@@ -301,18 +303,63 @@ func (r *natsRuntime) EnsureConsumer(ctx context.Context, conn providers.Connect
 	}
 }
 
-// Publish, Subscribe, and Ack land in subsequent commits (Task 4b/4c/4d).
+// Subscribe and Ack land in subsequent commits (Task 4c/4d).
 // For now, stub them so the compile-time RuntimeBroker assertion below
-// succeeds. The stubs return ErrNotImplemented so any accidental wiring
+// succeeds. The stubs return errNotImplemented so any accidental wiring
 // surfaces immediately rather than silently no-opping.
 
 // errNotImplemented is the sentinel returned by methods awaiting their
-// own sub-task commit (4b/4c/4d).
-var errNotImplemented = errors.New("nats: not implemented in this commit (see task 4b/4c/4d)")
+// own sub-task commit (4c/4d).
+var errNotImplemented = errors.New("nats: not implemented in this commit (see task 4c/4d)")
 
-// Publish — implemented in commit 4b.
+// Publish publishes a single message to JetStream and returns the
+// broker-assigned sequence number + ack timestamp. Header preservation
+// mirrors steps/publish.go: PublishRequest.headers populate nats.Header;
+// CorrelationId (when non-empty) is stamped onto a "Nats-Correlation-Id"
+// header so existing consumers see identical metadata to the legacy path.
+//
+// The returned PublishResponse.Sequence is the stream-scoped sequence from
+// nats.PubAck (formatted as decimal string to match the proto's typing);
+// AckedAt is the local UTC time at which the broker confirmed the publish.
 func (r *natsRuntime) Publish(ctx context.Context, conn providers.Connection, req *eventbusv1.PublishRequest) (*eventbusv1.PublishResponse, error) {
-	return nil, errNotImplemented
+	nc, err := asNATS(conn)
+	if err != nil {
+		return nil, fmt.Errorf("nats: Publish: %w", err)
+	}
+	if req == nil {
+		return nil, errors.New("nats: Publish: req is nil")
+	}
+	if req.GetSubject() == "" {
+		return nil, errors.New("nats: Publish: subject is required")
+	}
+	js, err := nc.JetStream(natsgo.Context(ctx))
+	if err != nil {
+		return nil, fmt.Errorf("nats: Publish: jetstream context: %w", err)
+	}
+	msg := &natsgo.Msg{
+		Subject: req.GetSubject(),
+		Data:    req.GetPayload(),
+	}
+	if hdrs := req.GetHeaders(); len(hdrs) > 0 {
+		msg.Header = make(natsgo.Header, len(hdrs))
+		for k, v := range hdrs {
+			msg.Header.Set(k, v)
+		}
+	}
+	if cid := req.GetCorrelationId(); cid != "" {
+		if msg.Header == nil {
+			msg.Header = make(natsgo.Header, 1)
+		}
+		msg.Header.Set("Nats-Correlation-Id", cid)
+	}
+	ack, err := js.PublishMsg(msg, natsgo.Context(ctx))
+	if err != nil {
+		return nil, fmt.Errorf("nats: Publish: %w", err)
+	}
+	return &eventbusv1.PublishResponse{
+		Sequence: strconv.FormatUint(ack.Sequence, 10),
+		AckedAt:  time.Now().UTC().Format(time.RFC3339),
+	}, nil
 }
 
 // Subscribe — implemented in commit 4c.

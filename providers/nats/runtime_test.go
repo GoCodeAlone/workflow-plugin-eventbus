@@ -332,3 +332,86 @@ func TestNATSRuntime_EnsureConsumer_UpdatesOnDiff(t *testing.T) {
 		t.Errorf("MaxDeliver = %d, want 7", info.Config.MaxDeliver)
 	}
 }
+
+// ── Publish ───────────────────────────────────────────────────────────────────
+
+func TestNATSRuntime_Publish_RoundTrip(t *testing.T) {
+	url := startEmbeddedNATS(t)
+	const (
+		streamName = "PUB_RT"
+		subject    = "PUB_RT.events"
+	)
+	mkStream(t, url, streamName, subject)
+
+	rb := natspkg.NewRuntime()
+	ctx := context.Background()
+	conn, err := rb.Connect(ctx, &eventbusv1.ClusterConfig{Provider: "nats", Dsn: url})
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	// Side-channel subscriber to receive the published message.
+	verifyNC, err := natsgo.Connect(url)
+	if err != nil {
+		t.Fatalf("verify connect: %v", err)
+	}
+	t.Cleanup(verifyNC.Close)
+	verifyJS, err := verifyNC.JetStream()
+	if err != nil {
+		t.Fatalf("verify jetstream: %v", err)
+	}
+	sub, err := verifyJS.SubscribeSync(subject, natsgo.BindStream(streamName), natsgo.DeliverAll())
+	if err != nil {
+		t.Fatalf("subscribe sync: %v", err)
+	}
+	t.Cleanup(func() { _ = sub.Drain() })
+
+	req := &eventbusv1.PublishRequest{
+		Subject:       subject,
+		Payload:       []byte(`{"vin":"WBA3A5C50DF456789"}`),
+		Headers:       map[string]string{"X-Trace-Id": "abc123"},
+		CorrelationId: "corr-xyz",
+	}
+	resp, err := rb.Publish(ctx, conn, req)
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if resp.GetSequence() == "" {
+		t.Error("expected non-empty sequence")
+	} else if resp.GetSequence() == "0" {
+		t.Errorf("expected non-zero sequence, got %q", resp.GetSequence())
+	}
+	if resp.GetAckedAt() == "" {
+		t.Error("expected non-empty acked_at")
+	}
+
+	msg, err := sub.NextMsg(5 * time.Second)
+	if err != nil {
+		t.Fatalf("NextMsg: %v", err)
+	}
+	if got := string(msg.Data); got != `{"vin":"WBA3A5C50DF456789"}` {
+		t.Errorf("payload = %q, want JSON body", got)
+	}
+	if got := msg.Header.Get("X-Trace-Id"); got != "abc123" {
+		t.Errorf("X-Trace-Id header = %q, want abc123", got)
+	}
+	if got := msg.Header.Get("Nats-Correlation-Id"); got != "corr-xyz" {
+		t.Errorf("Nats-Correlation-Id header = %q, want corr-xyz", got)
+	}
+}
+
+func TestNATSRuntime_Publish_EmptySubject(t *testing.T) {
+	url := startEmbeddedNATS(t)
+	rb := natspkg.NewRuntime()
+	ctx := context.Background()
+	conn, err := rb.Connect(ctx, &eventbusv1.ClusterConfig{Provider: "nats", Dsn: url})
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	if _, err := rb.Publish(ctx, conn, &eventbusv1.PublishRequest{}); err == nil {
+		t.Fatal("expected error for empty subject")
+	}
+}

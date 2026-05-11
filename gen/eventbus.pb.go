@@ -327,7 +327,17 @@ type ClusterConfig struct {
 	// kinesis holds Kinesis-specific configuration; ignored for other providers.
 	Kinesis *KinesisConfig `protobuf:"bytes,7,opt,name=kinesis,proto3" json:"kinesis,omitempty"`
 	// limits sets compute/storage resource limits for the cluster containers.
-	Limits        *ResourceLimits `protobuf:"bytes,8,opt,name=limits,proto3" json:"limits,omitempty"`
+	Limits *ResourceLimits `protobuf:"bytes,8,opt,name=limits,proto3" json:"limits,omitempty"`
+	// dsn is the Postgres DSN for the pg-backed provider (required when provider=pgchannel).
+	// Ignored for non-pgchannel providers.
+	Dsn *string `protobuf:"bytes,10,opt,name=dsn,proto3,oneof" json:"dsn,omitempty"`
+	// poll_interval is the polling fallback interval for the pg-backed provider
+	// (Go duration string, default "1s"). Ignored for non-pgchannel providers.
+	PollInterval *string `protobuf:"bytes,11,opt,name=poll_interval,json=pollInterval,proto3,oneof" json:"poll_interval,omitempty"`
+	// broker_target is the broker deployment target. Replaces deploy_target's
+	// role for non-IaC providers. Valid values: "in_process" (pgchannel only),
+	// or any existing deploy_target value for IaC-managed providers (NATS, etc.).
+	BrokerTarget  *string `protobuf:"bytes,12,opt,name=broker_target,json=brokerTarget,proto3,oneof" json:"broker_target,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -416,6 +426,27 @@ func (x *ClusterConfig) GetLimits() *ResourceLimits {
 		return x.Limits
 	}
 	return nil
+}
+
+func (x *ClusterConfig) GetDsn() string {
+	if x != nil && x.Dsn != nil {
+		return *x.Dsn
+	}
+	return ""
+}
+
+func (x *ClusterConfig) GetPollInterval() string {
+	if x != nil && x.PollInterval != nil {
+		return *x.PollInterval
+	}
+	return ""
+}
+
+func (x *ClusterConfig) GetBrokerTarget() string {
+	if x != nil && x.BrokerTarget != nil {
+		return *x.BrokerTarget
+	}
+	return ""
 }
 
 // JetStreamConfig holds NATS JetStream-specific settings.
@@ -718,7 +749,11 @@ type StreamConfig struct {
 	// max_age is the maximum age for messages in this stream.
 	MaxAge *durationpb.Duration `protobuf:"bytes,6,opt,name=max_age,json=maxAge,proto3" json:"max_age,omitempty"`
 	// ack_wait is the default acknowledgement deadline for consumers on this stream.
-	AckWait       *durationpb.Duration `protobuf:"bytes,7,opt,name=ack_wait,json=ackWait,proto3" json:"ack_wait,omitempty"`
+	AckWait *durationpb.Duration `protobuf:"bytes,7,opt,name=ack_wait,json=ackWait,proto3" json:"ack_wait,omitempty"`
+	// broker_ref names the broker module instance this stream binds to.
+	// Required for runtime routing through RuntimeBroker; validated by the
+	// streamModule at Start time (not proto-required to keep wire format compatible).
+	BrokerRef     string `protobuf:"bytes,10,opt,name=broker_ref,json=brokerRef,proto3" json:"broker_ref,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -802,6 +837,13 @@ func (x *StreamConfig) GetAckWait() *durationpb.Duration {
 	return nil
 }
 
+func (x *StreamConfig) GetBrokerRef() string {
+	if x != nil {
+		return x.BrokerRef
+	}
+	return ""
+}
+
 // ConsumerConfig is the typed config for infra.eventbus.consumer module
 // and trigger.eventbus.subscribe.
 type ConsumerConfig struct {
@@ -817,7 +859,11 @@ type ConsumerConfig struct {
 	// ack_policy controls how acknowledgements are required.
 	AckPolicy AckPolicy `protobuf:"varint,5,opt,name=ack_policy,json=ackPolicy,proto3,enum=workflow.plugin.eventbus.v1.AckPolicy" json:"ack_policy,omitempty"`
 	// max_deliver is the maximum number of delivery attempts before NACKing (0 = unlimited).
-	MaxDeliver    int32 `protobuf:"varint,6,opt,name=max_deliver,json=maxDeliver,proto3" json:"max_deliver,omitempty"`
+	MaxDeliver int32 `protobuf:"varint,6,opt,name=max_deliver,json=maxDeliver,proto3" json:"max_deliver,omitempty"`
+	// broker_ref names the broker module instance this consumer binds to.
+	// Required for runtime routing through RuntimeBroker; validated by the
+	// consumerModule at Start time (not proto-required to keep wire format compatible).
+	BrokerRef     string `protobuf:"bytes,10,opt,name=broker_ref,json=brokerRef,proto3" json:"broker_ref,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -894,6 +940,13 @@ func (x *ConsumerConfig) GetMaxDeliver() int32 {
 	return 0
 }
 
+func (x *ConsumerConfig) GetBrokerRef() string {
+	if x != nil {
+		return x.BrokerRef
+	}
+	return ""
+}
+
 // PublishRequest is the input for step.eventbus.publish.
 type PublishRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -905,6 +958,10 @@ type PublishRequest struct {
 	Headers map[string]string `protobuf:"bytes,3,rep,name=headers,proto3" json:"headers,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// correlation_id is an opaque identifier for request/reply correlation or tracing.
 	CorrelationId string `protobuf:"bytes,4,opt,name=correlation_id,json=correlationId,proto3" json:"correlation_id,omitempty"`
+	// broker_ref names the broker module instance to dispatch this publish through.
+	// Required for routing via RuntimeBroker; the step factory uses this to look up
+	// the registered broker runtime + connection.
+	BrokerRef     string `protobuf:"bytes,5,opt,name=broker_ref,json=brokerRef,proto3" json:"broker_ref,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -963,6 +1020,13 @@ func (x *PublishRequest) GetHeaders() map[string]string {
 func (x *PublishRequest) GetCorrelationId() string {
 	if x != nil {
 		return x.CorrelationId
+	}
+	return ""
+}
+
+func (x *PublishRequest) GetBrokerRef() string {
+	if x != nil {
+		return x.BrokerRef
 	}
 	return ""
 }
@@ -1030,7 +1094,11 @@ type ConsumeRequest struct {
 	// batch_size is the maximum number of messages to return in one call.
 	BatchSize int32 `protobuf:"varint,2,opt,name=batch_size,json=batchSize,proto3" json:"batch_size,omitempty"`
 	// max_wait is the maximum time to block waiting for messages.
-	MaxWait       *durationpb.Duration `protobuf:"bytes,3,opt,name=max_wait,json=maxWait,proto3" json:"max_wait,omitempty"`
+	MaxWait *durationpb.Duration `protobuf:"bytes,3,opt,name=max_wait,json=maxWait,proto3" json:"max_wait,omitempty"`
+	// broker_ref names the broker module instance to dispatch this consume through.
+	// Required for routing via RuntimeBroker; the step factory uses this to look up
+	// the registered broker runtime + connection.
+	BrokerRef     string `protobuf:"bytes,4,opt,name=broker_ref,json=brokerRef,proto3" json:"broker_ref,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1084,6 +1152,13 @@ func (x *ConsumeRequest) GetMaxWait() *durationpb.Duration {
 		return x.MaxWait
 	}
 	return nil
+}
+
+func (x *ConsumeRequest) GetBrokerRef() string {
+	if x != nil {
+		return x.BrokerRef
+	}
+	return ""
 }
 
 // ConsumeResponse is the output from step.eventbus.consume.
@@ -1227,7 +1302,11 @@ func (x *Message) GetAckToken() string {
 type AckRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// ack_token is the opaque acknowledgement token from Message.ack_token.
-	AckToken      string `protobuf:"bytes,1,opt,name=ack_token,json=ackToken,proto3" json:"ack_token,omitempty"`
+	AckToken string `protobuf:"bytes,1,opt,name=ack_token,json=ackToken,proto3" json:"ack_token,omitempty"`
+	// broker_ref names the broker module instance to dispatch this ack through.
+	// Required for routing via RuntimeBroker; the step factory uses this to look up
+	// the registered broker runtime + connection.
+	BrokerRef     string `protobuf:"bytes,2,opt,name=broker_ref,json=brokerRef,proto3" json:"broker_ref,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1265,6 +1344,13 @@ func (*AckRequest) Descriptor() ([]byte, []int) {
 func (x *AckRequest) GetAckToken() string {
 	if x != nil {
 		return x.AckToken
+	}
+	return ""
+}
+
+func (x *AckRequest) GetBrokerRef() string {
+	if x != nil {
+		return x.BrokerRef
 	}
 	return ""
 }
@@ -1310,7 +1396,7 @@ var File_eventbus_proto protoreflect.FileDescriptor
 
 const file_eventbus_proto_rawDesc = "" +
 	"\n" +
-	"\x0eeventbus.proto\x12\x1bworkflow.plugin.eventbus.v1\x1a\x1egoogle/protobuf/duration.proto\"\x9d\x03\n" +
+	"\x0eeventbus.proto\x12\x1bworkflow.plugin.eventbus.v1\x1a\x1egoogle/protobuf/duration.proto\"\xb4\x04\n" +
 	"\rClusterConfig\x12\x1a\n" +
 	"\bprovider\x18\x01 \x01(\tR\bprovider\x12#\n" +
 	"\rdeploy_target\x18\x02 \x01(\tR\fdeployTarget\x12\x18\n" +
@@ -1319,7 +1405,14 @@ const file_eventbus_proto_rawDesc = "" +
 	"\tjetstream\x18\x05 \x01(\v2,.workflow.plugin.eventbus.v1.JetStreamConfigR\tjetstream\x12>\n" +
 	"\x05kafka\x18\x06 \x01(\v2(.workflow.plugin.eventbus.v1.KafkaConfigR\x05kafka\x12D\n" +
 	"\akinesis\x18\a \x01(\v2*.workflow.plugin.eventbus.v1.KinesisConfigR\akinesis\x12C\n" +
-	"\x06limits\x18\b \x01(\v2+.workflow.plugin.eventbus.v1.ResourceLimitsR\x06limits\"\xb5\x01\n" +
+	"\x06limits\x18\b \x01(\v2+.workflow.plugin.eventbus.v1.ResourceLimitsR\x06limits\x12\x15\n" +
+	"\x03dsn\x18\n" +
+	" \x01(\tH\x00R\x03dsn\x88\x01\x01\x12(\n" +
+	"\rpoll_interval\x18\v \x01(\tH\x01R\fpollInterval\x88\x01\x01\x12(\n" +
+	"\rbroker_target\x18\f \x01(\tH\x02R\fbrokerTarget\x88\x01\x01B\x06\n" +
+	"\x04_dsnB\x10\n" +
+	"\x0e_poll_intervalB\x10\n" +
+	"\x0e_broker_target\"\xb5\x01\n" +
 	"\x0fJetStreamConfig\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12*\n" +
 	"\x11max_storage_bytes\x18\x02 \x01(\x03R\x0fmaxStorageBytes\x12(\n" +
@@ -1339,7 +1432,7 @@ const file_eventbus_proto_rawDesc = "" +
 	"\x0eResourceLimits\x12\x10\n" +
 	"\x03cpu\x18\x01 \x01(\tR\x03cpu\x12\x16\n" +
 	"\x06memory\x18\x02 \x01(\tR\x06memory\x12\x18\n" +
-	"\astorage\x18\x03 \x01(\tR\astorage\"\xc1\x02\n" +
+	"\astorage\x18\x03 \x01(\tR\astorage\"\xe0\x02\n" +
 	"\fStreamConfig\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1a\n" +
 	"\bsubjects\x18\x02 \x03(\tR\bsubjects\x12W\n" +
@@ -1347,7 +1440,10 @@ const file_eventbus_proto_rawDesc = "" +
 	"\fnum_replicas\x18\x04 \x01(\x05R\vnumReplicas\x12\x1b\n" +
 	"\tmax_bytes\x18\x05 \x01(\x03R\bmaxBytes\x122\n" +
 	"\amax_age\x18\x06 \x01(\v2\x19.google.protobuf.DurationR\x06maxAge\x124\n" +
-	"\back_wait\x18\a \x01(\v2\x19.google.protobuf.DurationR\aackWait\"\xa7\x02\n" +
+	"\back_wait\x18\a \x01(\v2\x19.google.protobuf.DurationR\aackWait\x12\x1d\n" +
+	"\n" +
+	"broker_ref\x18\n" +
+	" \x01(\tR\tbrokerRef\"\xc6\x02\n" +
 	"\x0eConsumerConfig\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1f\n" +
 	"\vstream_name\x18\x02 \x01(\tR\n" +
@@ -1357,23 +1453,30 @@ const file_eventbus_proto_rawDesc = "" +
 	"\n" +
 	"ack_policy\x18\x05 \x01(\x0e2&.workflow.plugin.eventbus.v1.AckPolicyR\tackPolicy\x12\x1f\n" +
 	"\vmax_deliver\x18\x06 \x01(\x05R\n" +
-	"maxDeliver\"\xfb\x01\n" +
+	"maxDeliver\x12\x1d\n" +
+	"\n" +
+	"broker_ref\x18\n" +
+	" \x01(\tR\tbrokerRef\"\x9a\x02\n" +
 	"\x0ePublishRequest\x12\x18\n" +
 	"\asubject\x18\x01 \x01(\tR\asubject\x12\x18\n" +
 	"\apayload\x18\x02 \x01(\fR\apayload\x12R\n" +
 	"\aheaders\x18\x03 \x03(\v28.workflow.plugin.eventbus.v1.PublishRequest.HeadersEntryR\aheaders\x12%\n" +
-	"\x0ecorrelation_id\x18\x04 \x01(\tR\rcorrelationId\x1a:\n" +
+	"\x0ecorrelation_id\x18\x04 \x01(\tR\rcorrelationId\x12\x1d\n" +
+	"\n" +
+	"broker_ref\x18\x05 \x01(\tR\tbrokerRef\x1a:\n" +
 	"\fHeadersEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"H\n" +
 	"\x0fPublishResponse\x12\x1a\n" +
 	"\bsequence\x18\x01 \x01(\tR\bsequence\x12\x19\n" +
-	"\backed_at\x18\x02 \x01(\tR\aackedAt\"\x81\x01\n" +
+	"\backed_at\x18\x02 \x01(\tR\aackedAt\"\xa0\x01\n" +
 	"\x0eConsumeRequest\x12\x1a\n" +
 	"\bconsumer\x18\x01 \x01(\tR\bconsumer\x12\x1d\n" +
 	"\n" +
 	"batch_size\x18\x02 \x01(\x05R\tbatchSize\x124\n" +
-	"\bmax_wait\x18\x03 \x01(\v2\x19.google.protobuf.DurationR\amaxWait\"S\n" +
+	"\bmax_wait\x18\x03 \x01(\v2\x19.google.protobuf.DurationR\amaxWait\x12\x1d\n" +
+	"\n" +
+	"broker_ref\x18\x04 \x01(\tR\tbrokerRef\"S\n" +
 	"\x0fConsumeResponse\x12@\n" +
 	"\bmessages\x18\x01 \x03(\v2$.workflow.plugin.eventbus.v1.MessageR\bmessages\"\xa2\x02\n" +
 	"\aMessage\x12\x18\n" +
@@ -1385,10 +1488,12 @@ const file_eventbus_proto_rawDesc = "" +
 	"\tack_token\x18\x06 \x01(\tR\backToken\x1a:\n" +
 	"\fHeadersEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\")\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"H\n" +
 	"\n" +
 	"AckRequest\x12\x1b\n" +
-	"\tack_token\x18\x01 \x01(\tR\backToken\"\r\n" +
+	"\tack_token\x18\x01 \x01(\tR\backToken\x12\x1d\n" +
+	"\n" +
+	"broker_ref\x18\x02 \x01(\tR\tbrokerRef\"\r\n" +
 	"\vAckResponse*\x8f\x01\n" +
 	"\x0fRetentionPolicy\x12 \n" +
 	"\x1cRETENTION_POLICY_UNSPECIFIED\x10\x00\x12\x1b\n" +
@@ -1486,6 +1591,7 @@ func file_eventbus_proto_init() {
 	if File_eventbus_proto != nil {
 		return
 	}
+	file_eventbus_proto_msgTypes[0].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

@@ -13,14 +13,14 @@ import (
 func TestConsumerModuleFactory_TypedModuleTypes(t *testing.T) {
 	f := &eventbus.ConsumerModuleFactory{}
 	types := f.TypedModuleTypes()
-	if len(types) != 1 || types[0] != "infra.eventbus.consumer" {
-		t.Errorf("TypedModuleTypes() = %v, want [infra.eventbus.consumer]", types)
+	if len(types) != 1 || types[0] != "eventbus.consumer" {
+		t.Errorf("TypedModuleTypes() = %v, want [eventbus.consumer]", types)
 	}
 }
 
 func TestConsumerModuleFactory_CreateTypedModule_WrongType(t *testing.T) {
 	f := &eventbus.ConsumerModuleFactory{}
-	_, err := f.CreateTypedModule("infra.eventbus", "x", nil)
+	_, err := f.CreateTypedModule("eventbus.broker", "x", nil)
 	if err == nil {
 		t.Fatal("expected error for wrong type")
 	}
@@ -29,7 +29,7 @@ func TestConsumerModuleFactory_CreateTypedModule_WrongType(t *testing.T) {
 func TestConsumerModuleFactory_CreateTypedModule_NilConfig(t *testing.T) {
 	f := &eventbus.ConsumerModuleFactory{}
 	// nil config → ConsumerConfig zero value → empty name → expect error
-	_, err := f.CreateTypedModule("infra.eventbus.consumer", "consumer-factory-nil", nil)
+	_, err := f.CreateTypedModule("eventbus.consumer", "consumer-factory-nil", nil)
 	if err == nil {
 		t.Fatal("expected error from NewConsumerModule for empty name")
 	}

@@ -1,5 +1,5 @@
 // Package eventbus implements the workflow-plugin-eventbus plugin.
-// It provides infra.eventbus, infra.eventbus.stream, and infra.eventbus.consumer
+// It provides eventbus.broker, eventbus.stream, and eventbus.consumer
 // module types plus step and trigger types for durable event-bus integration.
 package eventbus
 
@@ -247,14 +247,14 @@ func GetOrDialNATSConn(instanceName string) (*nats.Conn, error) {
 	if !uriOk || uri == "" {
 		key := strings.ToUpper(strings.ReplaceAll(instanceName, "-", "_"))
 		return nil, fmt.Errorf(
-			"infra.eventbus: no URI registered for bus %q; set EVENTBUS_%s_URI or NATS_URL",
+			"eventbus.broker: no URI registered for bus %q; set EVENTBUS_%s_URI or NATS_URL",
 			instanceName, key)
 	}
 
 	// Dial outside any lock — natsDialFn may block for the connection timeout.
 	nc, err := natsDialFn(uri)
 	if err != nil {
-		return nil, fmt.Errorf("infra.eventbus: dial NATS for bus %q at %s: %w", instanceName, uri, err)
+		return nil, fmt.Errorf("eventbus.broker: dial NATS for bus %q at %s: %w", instanceName, uri, err)
 	}
 
 	// Re-acquire to insert; check again for a race where another goroutine dialled first.
@@ -292,7 +292,7 @@ var natsDialFn = func(uri string) (*nats.Conn, error) {
 }
 
 // DefaultBusConn returns a live NATS connection for the lexicographically first
-// registered infra.eventbus module. Sorting ensures deterministic selection
+// registered eventbus.broker module. Sorting ensures deterministic selection
 // across invocations and concurrent goroutines, even when multiple buses are
 // registered. For multi-bus workflows, use GetOrDialNATSConn(instanceName)
 // directly.
@@ -310,7 +310,7 @@ func DefaultBusConn() (*nats.Conn, error) {
 	clusterMu.RUnlock()
 	if len(names) == 0 {
 		return nil, fmt.Errorf(
-			"infra.eventbus: no bus module registered; add an infra.eventbus module to your workflow config",
+			"eventbus.broker: no bus module registered; add an eventbus.broker module to your workflow config",
 		)
 	}
 	sort.Strings(names)
@@ -319,7 +319,7 @@ func DefaultBusConn() (*nats.Conn, error) {
 
 // ── ClusterModuleFactory (TypedModuleProvider) ────────────────────────────────
 
-// ClusterModuleFactory implements sdk.TypedModuleProvider for the infra.eventbus
+// ClusterModuleFactory implements sdk.TypedModuleProvider for the eventbus.broker
 // module type. The plugin wires this factory into CreateTypedModule.
 type ClusterModuleFactory struct{}
 
@@ -328,18 +328,18 @@ var _ sdk.TypedModuleProvider = (*ClusterModuleFactory)(nil)
 
 // TypedModuleTypes returns the single module type served by this factory.
 func (f *ClusterModuleFactory) TypedModuleTypes() []string {
-	return []string{"infra.eventbus"}
+	return []string{"eventbus.broker"}
 }
 
 // CreateTypedModule unpacks the typed proto config and delegates to NewClusterModule.
 func (f *ClusterModuleFactory) CreateTypedModule(typeName, name string, config *anypb.Any) (sdk.ModuleInstance, error) {
-	if typeName != "infra.eventbus" {
+	if typeName != "eventbus.broker" {
 		return nil, fmt.Errorf("%w: module type %q", sdk.ErrTypedContractNotHandled, typeName)
 	}
 	var cfg eventbusv1.ClusterConfig
 	if config != nil {
 		if err := config.UnmarshalTo(&cfg); err != nil {
-			return nil, fmt.Errorf("infra.eventbus %q: unmarshal typed config: %w", name, err)
+			return nil, fmt.Errorf("eventbus.broker %q: unmarshal typed config: %w", name, err)
 		}
 	}
 	return NewClusterModule(name, &cfg)
@@ -347,7 +347,7 @@ func (f *ClusterModuleFactory) CreateTypedModule(typeName, name string, config *
 
 // ── clusterModule (ModuleInstance) ───────────────────────────────────────────
 
-// clusterModule implements sdk.ModuleInstance for the infra.eventbus module type.
+// clusterModule implements sdk.ModuleInstance for the eventbus.broker module type.
 // It validates the ClusterConfig, registers the config and broker URI on Init(),
 // selects a provider runtime + opens a connection on Start(), and tears both
 // down on Stop().

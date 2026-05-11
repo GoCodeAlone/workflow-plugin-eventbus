@@ -155,7 +155,7 @@ func declareModule(t *testing.T, ctx context.Context, pbClient pb.PluginServiceC
 // Verifies:
 //   - Manifest name and author
 //   - Contract registry: all 7 strict-proto descriptors present
-//   - infra.eventbus module lifecycle (Create → Init → Start → Stop)
+//   - eventbus.broker module lifecycle (Create → Init → Start → Stop)
 //   - step.eventbus.publish: descriptive error when no broker URI registered
 //   - step.eventbus.consume: descriptive error when consumer not registered
 //   - step.eventbus.ack: descriptive error when ack_token is empty
@@ -195,7 +195,7 @@ func TestE2E_EventbusPluginScenario(t *testing.T) {
 			triggerTypes[c.GetTriggerType()] = true
 		}
 	}
-	for _, want := range []string{"infra.eventbus", "infra.eventbus.stream", "infra.eventbus.consumer"} {
+	for _, want := range []string{"eventbus.broker", "eventbus.stream", "eventbus.consumer"} {
 		if !moduleTypes[want] {
 			t.Errorf("contract registry missing module type %q", want)
 		}
@@ -216,7 +216,7 @@ func TestE2E_EventbusPluginScenario(t *testing.T) {
 		}
 	}
 
-	// ── 4. Declare infra.eventbus cluster module ──────────────────────────────
+	// ── 4. Declare eventbus.broker cluster module ─────────────────────────────
 	packedClusterCfg, err := anypb.New(&eventbusv1.ClusterConfig{
 		Provider:     "nats",
 		DeployTarget: "digitalocean.app_platform",
@@ -224,7 +224,7 @@ func TestE2E_EventbusPluginScenario(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pack ClusterConfig: %v", err)
 	}
-	declareModule(t, ctx, pbClient, "infra.eventbus", "e2e-bus", packedClusterCfg)
+	declareModule(t, ctx, pbClient, "eventbus.broker", "e2e-bus", packedClusterCfg)
 
 	// ── 5. step.eventbus.publish — no broker URI registered ───────────────────
 	createPublishResp, err := pbClient.CreateStep(ctx, &pb.CreateStepRequest{
@@ -315,9 +315,9 @@ func TestE2E_EventbusPluginScenario(t *testing.T) {
 	modTypes, err := pbClient.GetModuleTypes(ctx, &emptypb.Empty{})
 	mustNoRPCErr(t, "GetModuleTypes", err, "")
 	wantModTypes := map[string]bool{
-		"infra.eventbus":             false,
-		"infra.eventbus.stream":      false,
-		"infra.eventbus.consumer":    false,
+		"eventbus.broker":            false,
+		"eventbus.stream":            false,
+		"eventbus.consumer":          false,
 		"trigger.eventbus.subscribe": false,
 	}
 	for _, typ := range modTypes.GetTypes() {
@@ -368,9 +368,9 @@ func TestE2E_EventbusPluginScenario(t *testing.T) {
 // The test:
 //  1. Connects directly to NATS to pre-create the JetStream stream + durable consumer.
 //  2. Builds + starts the plugin binary as a subprocess; the subprocess inherits
-//     NATS_URL from the test process environment, which the infra.eventbus module
+//     NATS_URL from the test process environment, which the eventbus.broker module
 //     resolves during Init.
-//  3. Declares infra.eventbus, infra.eventbus.stream, and infra.eventbus.consumer
+//  3. Declares eventbus.broker, eventbus.stream, and eventbus.consumer
 //     modules via gRPC (Create → Init → Start).
 //  4. Publishes 10 messages via step.eventbus.publish.
 //  5. Consumes all 10 in a single batch via step.eventbus.consume (batch_size=10).
@@ -449,7 +449,7 @@ func TestE2E_EventbusPluginScenario_WithNATS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pack ClusterConfig: %v", err)
 	}
-	declareModule(t, ctx, pbClient, "infra.eventbus", "nats-bus", packedClusterCfg)
+	declareModule(t, ctx, pbClient, "eventbus.broker", "nats-bus", packedClusterCfg)
 
 	packedStreamCfg, err := anypb.New(&eventbusv1.StreamConfig{
 		Name:     streamName,
@@ -458,7 +458,7 @@ func TestE2E_EventbusPluginScenario_WithNATS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pack StreamConfig: %v", err)
 	}
-	declareModule(t, ctx, pbClient, "infra.eventbus.stream", "bmw-fulfillment-stream", packedStreamCfg)
+	declareModule(t, ctx, pbClient, "eventbus.stream", "bmw-fulfillment-stream", packedStreamCfg)
 
 	packedConsumerCfg, err := anypb.New(&eventbusv1.ConsumerConfig{
 		Name:       consumerName,
@@ -467,7 +467,7 @@ func TestE2E_EventbusPluginScenario_WithNATS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pack ConsumerConfig: %v", err)
 	}
-	declareModule(t, ctx, pbClient, "infra.eventbus.consumer", "bmw-fulfillment-consumer", packedConsumerCfg)
+	declareModule(t, ctx, pbClient, "eventbus.consumer", "bmw-fulfillment-consumer", packedConsumerCfg)
 
 	// ── 4. Publish 10 messages via step.eventbus.publish ─────────────────────
 	createPublishResp, err := pbClient.CreateStep(ctx, &pb.CreateStepRequest{

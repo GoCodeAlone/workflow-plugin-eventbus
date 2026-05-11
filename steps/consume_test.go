@@ -23,7 +23,7 @@ func TestConsumeHandler_EmptyConsumer(t *testing.T) {
 }
 
 func TestConsumeHandler_ConsumerNotFound(t *testing.T) {
-	// No infra.eventbus.consumer module registered with this durable name.
+	// No eventbus.consumer module registered with this durable name.
 	req := sdk.TypedStepRequest[*emptypb.Empty, *eventbusv1.ConsumeRequest]{
 		Config: &emptypb.Empty{},
 		Input: &eventbusv1.ConsumeRequest{

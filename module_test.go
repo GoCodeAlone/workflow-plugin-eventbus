@@ -20,14 +20,14 @@ import (
 func TestClusterModuleFactory_TypedModuleTypes(t *testing.T) {
 	f := &eventbus.ClusterModuleFactory{}
 	types := f.TypedModuleTypes()
-	if len(types) != 1 || types[0] != "infra.eventbus" {
-		t.Errorf("TypedModuleTypes() = %v, want [infra.eventbus]", types)
+	if len(types) != 1 || types[0] != "eventbus.broker" {
+		t.Errorf("TypedModuleTypes() = %v, want [eventbus.broker]", types)
 	}
 }
 
 func TestClusterModuleFactory_CreateTypedModule_WrongType(t *testing.T) {
 	f := &eventbus.ClusterModuleFactory{}
-	_, err := f.CreateTypedModule("infra.eventbus.stream", "x", nil)
+	_, err := f.CreateTypedModule("eventbus.stream", "x", nil)
 	if err == nil {
 		t.Fatal("expected error for wrong type")
 	}
@@ -36,7 +36,7 @@ func TestClusterModuleFactory_CreateTypedModule_WrongType(t *testing.T) {
 func TestClusterModuleFactory_CreateTypedModule_NilConfig(t *testing.T) {
 	f := &eventbus.ClusterModuleFactory{}
 	// nil config → ClusterConfig zero value → empty provider → expect error
-	_, err := f.CreateTypedModule("infra.eventbus", "bus-factory-nil", nil)
+	_, err := f.CreateTypedModule("eventbus.broker", "bus-factory-nil", nil)
 	if err == nil {
 		t.Fatal("expected error from NewClusterModule for empty provider")
 	}

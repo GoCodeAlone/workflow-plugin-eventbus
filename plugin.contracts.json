@@ -3,19 +3,19 @@
     "contracts": [
         {
             "kind": "module",
-            "type": "infra.eventbus",
+            "type": "eventbus.broker",
             "mode": "strict_proto",
             "config": "workflow.plugin.eventbus.v1.ClusterConfig"
         },
         {
             "kind": "module",
-            "type": "infra.eventbus.stream",
+            "type": "eventbus.stream",
             "mode": "strict_proto",
             "config": "workflow.plugin.eventbus.v1.StreamConfig"
         },
         {
             "kind": "module",
-            "type": "infra.eventbus.consumer",
+            "type": "eventbus.consumer",
             "mode": "strict_proto",
             "config": "workflow.plugin.eventbus.v1.ConsumerConfig"
         },

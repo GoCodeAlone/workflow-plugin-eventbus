@@ -60,7 +60,7 @@ func GetConsumerByName(durableName string) (*eventbusv1.ConsumerConfig, bool) {
 // ── ConsumerModuleFactory (TypedModuleProvider) ───────────────────────────────
 
 // ConsumerModuleFactory implements sdk.TypedModuleProvider for the
-// infra.eventbus.consumer module type.
+// eventbus.consumer module type.
 type ConsumerModuleFactory struct{}
 
 // Compile-time assertion: ConsumerModuleFactory implements sdk.TypedModuleProvider.
@@ -68,18 +68,18 @@ var _ sdk.TypedModuleProvider = (*ConsumerModuleFactory)(nil)
 
 // TypedModuleTypes returns the single module type served by this factory.
 func (f *ConsumerModuleFactory) TypedModuleTypes() []string {
-	return []string{"infra.eventbus.consumer"}
+	return []string{"eventbus.consumer"}
 }
 
 // CreateTypedModule unpacks the typed proto config and delegates to NewConsumerModule.
 func (f *ConsumerModuleFactory) CreateTypedModule(typeName, name string, config *anypb.Any) (sdk.ModuleInstance, error) {
-	if typeName != "infra.eventbus.consumer" {
+	if typeName != "eventbus.consumer" {
 		return nil, fmt.Errorf("%w: module type %q", sdk.ErrTypedContractNotHandled, typeName)
 	}
 	var cfg eventbusv1.ConsumerConfig
 	if config != nil {
 		if err := config.UnmarshalTo(&cfg); err != nil {
-			return nil, fmt.Errorf("infra.eventbus.consumer %q: unmarshal typed config: %w", name, err)
+			return nil, fmt.Errorf("eventbus.consumer %q: unmarshal typed config: %w", name, err)
 		}
 	}
 	return NewConsumerModule(name, &cfg)
@@ -87,7 +87,7 @@ func (f *ConsumerModuleFactory) CreateTypedModule(typeName, name string, config 
 
 // ── consumerModule (ModuleInstance) ──────────────────────────────────────────
 
-// consumerModule implements sdk.ModuleInstance for the infra.eventbus.consumer
+// consumerModule implements sdk.ModuleInstance for the eventbus.consumer
 // module type. It declares a durable JetStream consumer (or Kafka consumer group)
 // and registers its config for use by step and trigger modules. No background
 // goroutines are started — consumption is pull-based, driven by step execution.
@@ -106,10 +106,10 @@ var _ sdk.ModuleInstance = (*consumerModule)(nil)
 //   - config.stream_name is empty
 func NewConsumerModule(instanceName string, cfg *eventbusv1.ConsumerConfig) (sdk.ModuleInstance, error) {
 	if cfg.GetName() == "" {
-		return nil, fmt.Errorf("infra.eventbus.consumer %q: config.name is required", instanceName)
+		return nil, fmt.Errorf("eventbus.consumer %q: config.name is required", instanceName)
 	}
 	if cfg.GetStreamName() == "" {
-		return nil, fmt.Errorf("infra.eventbus.consumer %q: config.stream_name is required", instanceName)
+		return nil, fmt.Errorf("eventbus.consumer %q: config.stream_name is required", instanceName)
 	}
 	return &consumerModule{instanceName: instanceName, config: cfg}, nil
 }
@@ -149,13 +149,13 @@ func (m *consumerModule) Start(ctx context.Context) error {
 		return lookupErr
 	}); err != nil {
 		return fmt.Errorf(
-			"infra.eventbus.consumer %q: broker %q not available within 10s: %w",
+			"eventbus.consumer %q: broker %q not available within 10s: %w",
 			m.instanceName, brokerRef, err,
 		)
 	}
 	streamName := m.config.GetStreamName()
 	if err := rb.EnsureConsumer(ctx, conn, streamName, m.config); err != nil {
-		return fmt.Errorf("infra.eventbus.consumer %q: ensure: %w", m.instanceName, err)
+		return fmt.Errorf("eventbus.consumer %q: ensure: %w", m.instanceName, err)
 	}
 	return nil
 }

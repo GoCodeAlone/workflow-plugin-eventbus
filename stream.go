@@ -45,7 +45,7 @@ func UnregisterStream(instanceName string) {
 // ── StreamModuleFactory (TypedModuleProvider) ─────────────────────────────────
 
 // StreamModuleFactory implements sdk.TypedModuleProvider for the
-// infra.eventbus.stream module type.
+// eventbus.stream module type.
 type StreamModuleFactory struct{}
 
 // Compile-time assertion: StreamModuleFactory implements sdk.TypedModuleProvider.
@@ -53,18 +53,18 @@ var _ sdk.TypedModuleProvider = (*StreamModuleFactory)(nil)
 
 // TypedModuleTypes returns the single module type served by this factory.
 func (f *StreamModuleFactory) TypedModuleTypes() []string {
-	return []string{"infra.eventbus.stream"}
+	return []string{"eventbus.stream"}
 }
 
 // CreateTypedModule unpacks the typed proto config and delegates to NewStreamModule.
 func (f *StreamModuleFactory) CreateTypedModule(typeName, name string, config *anypb.Any) (sdk.ModuleInstance, error) {
-	if typeName != "infra.eventbus.stream" {
+	if typeName != "eventbus.stream" {
 		return nil, fmt.Errorf("%w: module type %q", sdk.ErrTypedContractNotHandled, typeName)
 	}
 	var cfg eventbusv1.StreamConfig
 	if config != nil {
 		if err := config.UnmarshalTo(&cfg); err != nil {
-			return nil, fmt.Errorf("infra.eventbus.stream %q: unmarshal typed config: %w", name, err)
+			return nil, fmt.Errorf("eventbus.stream %q: unmarshal typed config: %w", name, err)
 		}
 	}
 	return NewStreamModule(name, &cfg)
@@ -72,7 +72,7 @@ func (f *StreamModuleFactory) CreateTypedModule(typeName, name string, config *a
 
 // ── streamModule (ModuleInstance) ────────────────────────────────────────────
 
-// streamModule implements sdk.ModuleInstance for the infra.eventbus.stream
+// streamModule implements sdk.ModuleInstance for the eventbus.stream
 // module type. It declares a durable JetStream stream (or Kafka topic) and
 // registers its config for use by step and trigger modules.
 type streamModule struct {
@@ -90,10 +90,10 @@ var _ sdk.ModuleInstance = (*streamModule)(nil)
 //   - config.subjects contains no entries
 func NewStreamModule(instanceName string, cfg *eventbusv1.StreamConfig) (sdk.ModuleInstance, error) {
 	if cfg.GetName() == "" {
-		return nil, fmt.Errorf("infra.eventbus.stream %q: config.name is required", instanceName)
+		return nil, fmt.Errorf("eventbus.stream %q: config.name is required", instanceName)
 	}
 	if len(cfg.GetSubjects()) == 0 {
-		return nil, fmt.Errorf("infra.eventbus.stream %q: config.subjects must contain at least one entry", instanceName)
+		return nil, fmt.Errorf("eventbus.stream %q: config.subjects must contain at least one entry", instanceName)
 	}
 	return &streamModule{instanceName: instanceName, config: cfg}, nil
 }
@@ -130,12 +130,12 @@ func (m *streamModule) Start(ctx context.Context) error {
 		return lookupErr
 	}); err != nil {
 		return fmt.Errorf(
-			"infra.eventbus.stream %q: broker %q not available within 10s: %w",
+			"eventbus.stream %q: broker %q not available within 10s: %w",
 			m.instanceName, brokerRef, err,
 		)
 	}
 	if err := rb.EnsureStream(ctx, conn, m.config); err != nil {
-		return fmt.Errorf("infra.eventbus.stream %q: ensure: %w", m.instanceName, err)
+		return fmt.Errorf("eventbus.stream %q: ensure: %w", m.instanceName, err)
 	}
 	return nil
 }

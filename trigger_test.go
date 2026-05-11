@@ -27,7 +27,7 @@ func TestSubscribeTriggerModuleFactory_TypedModuleTypes(t *testing.T) {
 
 func TestSubscribeTriggerModuleFactory_CreateTypedModule_WrongType(t *testing.T) {
 	f := &eventbus.SubscribeTriggerModuleFactory{}
-	_, err := f.CreateTypedModule("infra.eventbus", "x", nil)
+	_, err := f.CreateTypedModule("eventbus.broker", "x", nil)
 	if err == nil {
 		t.Fatal("expected error for wrong type")
 	}

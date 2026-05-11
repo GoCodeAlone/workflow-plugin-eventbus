@@ -1,5 +1,30 @@
 package pgchannel
 
+// Connection pool sizing
+//
+// Each call to runtime.Subscribe persistently holds TWO Postgres
+// connections for its entire lifetime:
+//
+//  1. The advisory lock conn (pg_advisory_lock held while Subscribe runs).
+//  2. The LISTEN conn (acquired once per LISTEN session, replaced on
+//     reconnect, but always held for the lifetime of the active session).
+//
+// Publish, Ack, EnsureStream, and EnsureConsumer are transient — they
+// borrow a conn for the duration of a single SQL call and return it.
+//
+// For a workflow-server pod running N concurrent Subscribe calls (one per
+// configured consumer), the connection-pool budget therefore needs:
+//
+//	max_conns >= 2*N + 4
+//
+// The "+4" leaves headroom for Publish/Ack/Ensure transients running
+// alongside the steady-state subscribers. Falling below 2*N starves the
+// LISTEN/lock-acquisition phase and the pool deadlocks.
+//
+// Operators can set this explicitly via ClusterConfig.max_conns; if unset
+// or zero, defaultMaxConns applies. The default (16) accommodates a
+// 6-consumer deployment without operator intervention (2*6 + 4 = 16).
+
 import (
 	"context"
 	"errors"
@@ -11,11 +36,12 @@ import (
 	"github.com/GoCodeAlone/workflow-plugin-eventbus/providers"
 )
 
-// defaultMaxConns is the pool MaxConns ceiling used when the caller passes
-// 0 or a negative value to OpenConnection. Four matches the design's
-// expected concurrency: at most a handful of poller / LISTEN / publish
-// goroutines per workflow-server pod.
-const defaultMaxConns int32 = 4
+// defaultMaxConns is the pool MaxConns ceiling used when ClusterConfig.max_conns
+// is zero. Sized to accommodate the 2-conn-per-Subscribe budget (advisory
+// lock + LISTEN) for a 6-consumer deployment without operator intervention:
+// 2*6 + 4 = 16. Operators with more consumers should set max_conns explicitly
+// (rule of thumb: 2*N + 4 where N is the consumer count).
+const defaultMaxConns int32 = 16
 
 // defaultPollInterval is the fallback poll cadence when ClusterConfig.poll_interval
 // is unset or unparseable. Sized to deliver sub-second-ish latency while

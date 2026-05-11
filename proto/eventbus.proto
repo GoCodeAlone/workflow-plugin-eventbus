@@ -94,6 +94,12 @@ message ClusterConfig {
   // role for non-IaC providers. Valid values: "in_process" (pgchannel only),
   // or any existing deploy_target value for IaC-managed providers (NATS, etc.).
   string broker_target = 12;
+  // max_conns is the pgxpool MaxConns ceiling for the pg-backed provider
+  // (default 16). Each Subscribe holds 2 connections persistently (advisory
+  // lock + LISTEN); for N consumers the recommended setting is >= 2*N + 4
+  // to leave headroom for Publish/Ack/Ensure transients. Ignored for
+  // non-pgchannel providers.
+  int32 max_conns = 13;
 }
 
 // JetStreamConfig holds NATS JetStream-specific settings.

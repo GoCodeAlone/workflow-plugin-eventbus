@@ -337,7 +337,13 @@ type ClusterConfig struct {
 	// broker_target is the broker deployment target. Replaces deploy_target's
 	// role for non-IaC providers. Valid values: "in_process" (pgchannel only),
 	// or any existing deploy_target value for IaC-managed providers (NATS, etc.).
-	BrokerTarget  string `protobuf:"bytes,12,opt,name=broker_target,json=brokerTarget,proto3" json:"broker_target,omitempty"`
+	BrokerTarget string `protobuf:"bytes,12,opt,name=broker_target,json=brokerTarget,proto3" json:"broker_target,omitempty"`
+	// max_conns is the pgxpool MaxConns ceiling for the pg-backed provider
+	// (default 16). Each Subscribe holds 2 connections persistently (advisory
+	// lock + LISTEN); for N consumers the recommended setting is >= 2*N + 4
+	// to leave headroom for Publish/Ack/Ensure transients. Ignored for
+	// non-pgchannel providers.
+	MaxConns      int32 `protobuf:"varint,13,opt,name=max_conns,json=maxConns,proto3" json:"max_conns,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -447,6 +453,13 @@ func (x *ClusterConfig) GetBrokerTarget() string {
 		return x.BrokerTarget
 	}
 	return ""
+}
+
+func (x *ClusterConfig) GetMaxConns() int32 {
+	if x != nil {
+		return x.MaxConns
+	}
+	return 0
 }
 
 // JetStreamConfig holds NATS JetStream-specific settings.
@@ -1396,7 +1409,7 @@ var File_eventbus_proto protoreflect.FileDescriptor
 
 const file_eventbus_proto_rawDesc = "" +
 	"\n" +
-	"\x0eeventbus.proto\x12\x1bworkflow.plugin.eventbus.v1\x1a\x1egoogle/protobuf/duration.proto\"\xff\x03\n" +
+	"\x0eeventbus.proto\x12\x1bworkflow.plugin.eventbus.v1\x1a\x1egoogle/protobuf/duration.proto\"\x9c\x04\n" +
 	"\rClusterConfig\x12\x1a\n" +
 	"\bprovider\x18\x01 \x01(\tR\bprovider\x12#\n" +
 	"\rdeploy_target\x18\x02 \x01(\tR\fdeployTarget\x12\x18\n" +
@@ -1409,7 +1422,8 @@ const file_eventbus_proto_rawDesc = "" +
 	"\x03dsn\x18\n" +
 	" \x01(\tR\x03dsn\x12#\n" +
 	"\rpoll_interval\x18\v \x01(\tR\fpollInterval\x12#\n" +
-	"\rbroker_target\x18\f \x01(\tR\fbrokerTargetJ\x04\b\t\x10\n" +
+	"\rbroker_target\x18\f \x01(\tR\fbrokerTarget\x12\x1b\n" +
+	"\tmax_conns\x18\r \x01(\x05R\bmaxConnsJ\x04\b\t\x10\n" +
 	"\"\xb5\x01\n" +
 	"\x0fJetStreamConfig\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12*\n" +

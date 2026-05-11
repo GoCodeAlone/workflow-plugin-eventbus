@@ -73,7 +73,10 @@ func (r *runtime) Connect(ctx context.Context, cfg *eventbusv1.ClusterConfig) (p
 	if dsn == "" {
 		return nil, errors.New("pgchannel: Connect: cfg.dsn is empty; populate ClusterConfig.dsn with the Postgres DSN")
 	}
-	conn, err := OpenConnection(ctx, dsn, defaultMaxConns)
+	// max_conns: operator-configurable pool ceiling. Each Subscribe holds
+	// 2 conns (advisory lock + LISTEN), so under-sizing causes pool
+	// deadlock. OpenConnection applies defaultMaxConns when 0 is passed.
+	conn, err := OpenConnection(ctx, dsn, cfg.GetMaxConns())
 	if err != nil {
 		return nil, err
 	}

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
 	eventbusv1 "github.com/GoCodeAlone/workflow-plugin-eventbus/gen"
@@ -88,8 +89,9 @@ func UnregisterBusURI(instanceName string) {
 // *clusterModule. Stream + consumer modules look up their broker by name via
 // LookupRuntime to get the runtime + cached Connection.
 //
-// Registration happens in clusterModule.Start (after runtime.Connect succeeds)
-// and removal in clusterModule.Stop. Lookups before Start return "not yet
+// Registration happens in `Start`; the degraded-mode nats branch registers
+// with nil runtime/conn to preserve the LookupRuntime → "not yet started"
+// contract. Removal happens in `Stop`. Lookups before Start return "not yet
 // started" so callers see a clear lifecycle error rather than a nil deref.
 var brokerInstanceRegistry sync.Map // string → *clusterModule
 
@@ -127,10 +129,17 @@ func LookupRuntime(name string) (providers.RuntimeBroker, providers.Connection, 
 	if !ok {
 		return nil, nil, fmt.Errorf("eventbus.broker %q not registered", name)
 	}
-	if m.runtime == nil || m.conn == nil {
+	// Read runtime + conn under the read lock so concurrent Start/Stop can't
+	// flip them mid-read. Copy into locals + release before doing the nil
+	// checks so the lock window stays minimal.
+	m.mu.RLock()
+	rt := m.runtime
+	conn := m.conn
+	m.mu.RUnlock()
+	if rt == nil || conn == nil {
 		return nil, nil, fmt.Errorf("eventbus.broker %q: not yet started (runtime/conn nil)", name)
 	}
-	return m.runtime, m.conn, nil
+	return rt, conn, nil
 }
 
 // ── NATS connection cache ─────────────────────────────────────────────────────
@@ -299,11 +308,17 @@ type clusterModule struct {
 	instanceName string
 	config       *eventbusv1.ClusterConfig
 
+	// mu guards runtime + conn so concurrent LookupRuntime callers can't
+	// observe a torn read while Start/Stop is flipping the pointers. The
+	// two fields are read together (LookupRuntime returns both), so a
+	// single RWMutex is simpler and cheaper than two atomic.Pointers
+	// with a separate consistency story.
+	mu sync.RWMutex
 	// runtime is the provider-specific RuntimeBroker selected at Start time.
-	// nil before Start, nil after Stop.
+	// nil before Start, nil after Stop. Guarded by mu.
 	runtime providers.RuntimeBroker
 	// conn is the live broker Connection opened via runtime.Connect at Start.
-	// nil before Start, nil after Stop.
+	// nil before Start, nil after Stop. Guarded by mu.
 	conn providers.Connection
 }
 
@@ -393,8 +408,10 @@ func (m *clusterModule) Init() error {
 //	The runtime expects cfg.Dsn to carry the broker URL. The legacy Init()
 //	resolves env-var URIs into the busURIRegistry. When provider is "nats"
 //	and cfg.Dsn is empty we fall back to that registry so legacy
-//	NATS_URL/EVENTBUS_<NAME>_URI flows keep working. The cfg pointer is
-//	mutated in-place because clusterModule owns it.
+//	NATS_URL/EVENTBUS_<NAME>_URI flows keep working. We pass a *clone* of
+//	cfg to runtime.Connect with the resolved Dsn set on the clone — the
+//	original m.config pointer (already published via RegisterCluster in
+//	Init) is never mutated.
 //
 // Step factories and the trigger module still use the legacy
 // nats.Conn-direct path (GetOrDialNATSConn, RegisterNATSConn, etc.) until
@@ -402,14 +419,18 @@ func (m *clusterModule) Init() error {
 // preserves backward compatibility during the staged migration.
 func (m *clusterModule) Start(ctx context.Context) error {
 	provider := m.config.GetProvider()
+	// Resolve DSN into a local without touching m.config so that callers
+	// holding the pointer published by Init (e.g. GetCluster) don't observe
+	// a torn write. We clone m.config before handing it to runtime.Connect.
+	dsn := m.config.GetDsn()
 	var rt providers.RuntimeBroker
 	switch provider {
 	case "nats":
 		// Backwards-compat: when Dsn is empty fall back to the URI that
 		// Init resolved from env vars.
-		if m.config.GetDsn() == "" {
+		if dsn == "" {
 			if uri, ok := GetBusURI(m.instanceName); ok && uri != "" {
-				m.config.Dsn = uri
+				dsn = uri
 			}
 		}
 		// Legacy degraded mode: when no DSN/URI is available at Start time
@@ -419,7 +440,7 @@ func (m *clusterModule) Start(ctx context.Context) error {
 		// the missing-URI error at execution time with the same message.
 		// LookupRuntime will return "not yet started" so any Group F caller
 		// migrated to the runtime sees a clear error rather than a nil deref.
-		if m.config.GetDsn() == "" {
+		if dsn == "" {
 			RegisterBrokerInstance(m.instanceName, m)
 			return nil
 		}
@@ -429,12 +450,22 @@ func (m *clusterModule) Start(ctx context.Context) error {
 	default:
 		return fmt.Errorf("eventbus.broker %q: unsupported provider %q for Start (must be nats|pgchannel)", m.instanceName, provider)
 	}
-	conn, err := rt.Connect(ctx, m.config)
+	// Clone cfg so Connect sees the resolved Dsn without us mutating the
+	// shared m.config pointer that Init already published via
+	// RegisterCluster. proto.Clone is the standard way to deep-copy a
+	// generated proto message.
+	cfgClone, _ := proto.Clone(m.config).(*eventbusv1.ClusterConfig)
+	cfgClone.Dsn = dsn
+	conn, err := rt.Connect(ctx, cfgClone)
 	if err != nil {
 		return fmt.Errorf("eventbus.broker %q: connect: %w", m.instanceName, err)
 	}
+	// Publish runtime + conn under the write lock so concurrent
+	// LookupRuntime readers never observe a half-set pair.
+	m.mu.Lock()
 	m.runtime = rt
 	m.conn = conn
+	m.mu.Unlock()
 	RegisterBrokerInstance(m.instanceName, m)
 	return nil
 }
@@ -451,12 +482,21 @@ func (m *clusterModule) Start(ctx context.Context) error {
 // teardown is gated on conn != nil so the lifecycle remains symmetric.
 func (m *clusterModule) Stop(_ context.Context) error {
 	UnregisterBrokerInstance(m.instanceName)
-	var closeErr error
-	if m.conn != nil {
-		closeErr = m.conn.Close()
-		m.conn = nil
-	}
+	// Snapshot conn under the write lock and clear both fields so any
+	// concurrent LookupRuntime read sees a clean "not yet started" state
+	// rather than a runtime paired with a closed conn. The actual Close
+	// call happens *outside* the lock — Close can be slow (network round
+	// trip, pgx pool drain) and we don't want to block LookupRuntime
+	// readers behind it.
+	m.mu.Lock()
+	conn := m.conn
+	m.conn = nil
 	m.runtime = nil
+	m.mu.Unlock()
+	var closeErr error
+	if conn != nil {
+		closeErr = conn.Close()
+	}
 	closeNATSConn(m.instanceName) // drain + close legacy cached *nats.Conn, idempotent
 	UnregisterBusURI(m.instanceName)
 	UnregisterCluster(m.instanceName)

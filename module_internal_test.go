@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	eventbusv1 "github.com/GoCodeAlone/workflow-plugin-eventbus/gen"
@@ -80,6 +81,97 @@ func TestLookupRuntime_NotStarted(t *testing.T) {
 	if !strings.Contains(err.Error(), "not yet started") {
 		t.Errorf("error = %q, want substring \"not yet started\"", err.Error())
 	}
+}
+
+// TestClusterModule_StartStopConcurrentLookup is the regression test for the
+// runtime/conn race that Group E would have surfaced once stream/consumer
+// modules began calling LookupRuntime from their Start hooks. Without the
+// sync.RWMutex guard on clusterModule.runtime + conn, the production Stop
+// path (which sets both to nil) racing against LookupRuntime would either
+//   - panic on nil deref inside the caller dereferencing conn, or
+//   - get caught by `go test -race` as a data race on the field pair.
+//
+// This test spawns one goroutine repeatedly publishing runtime+conn (the
+// "Start" side) and clearing them (the "Stop" side) under the mutex,
+// concurrently with 100 reader goroutines each calling LookupRuntime in
+// a tight loop. With the mutex, neither -race nor a nil deref should fire.
+//
+// We drive the field writes directly (not via the real Start/Stop, which
+// hard-code provider runtimes) so the test stays hermetic — no Postgres
+// container, no live NATS broker. The mutex contract being exercised
+// is identical: every writer holds m.mu.Lock; every reader holds
+// m.mu.RLock; readers only ever see a fully-set or fully-cleared pair.
+func TestClusterModule_StartStopConcurrentLookup(t *testing.T) {
+	const (
+		readers       = 100
+		writeCycles   = 500
+		readsPerGoroutine = 1000
+	)
+	cm := &clusterModule{instanceName: "start-stop-race-bus"}
+	RegisterBrokerInstance(cm.instanceName, cm)
+	t.Cleanup(func() { UnregisterBrokerInstance(cm.instanceName) })
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+
+	// Writer goroutine: alternates between "Start" (set fields, register)
+	// and "Stop" (unregister, clear fields) under the mutex, mirroring the
+	// production code path exactly.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		mc := &mockConn{}
+		mr := mockRuntime{}
+		for i := 0; i < writeCycles; i++ {
+			// Start side.
+			cm.mu.Lock()
+			cm.runtime = mr
+			cm.conn = mc
+			cm.mu.Unlock()
+			RegisterBrokerInstance(cm.instanceName, cm)
+
+			// Stop side: snapshot under lock, clear, then "close" outside.
+			UnregisterBrokerInstance(cm.instanceName)
+			cm.mu.Lock()
+			c := cm.conn
+			cm.conn = nil
+			cm.runtime = nil
+			cm.mu.Unlock()
+			_ = c // would be c.Close() in production
+			// Re-register so the next reader iteration has a target.
+			RegisterBrokerInstance(cm.instanceName, cm)
+		}
+		close(stop)
+	}()
+
+	// Reader goroutines: hammer LookupRuntime. Each lookup must either
+	// return (runtime, conn, nil) with BOTH non-nil, or return an error.
+	// The forbidden outcome is err==nil with a nil runtime or conn (the
+	// torn-read symptom of the unguarded version).
+	for r := 0; r < readers; r++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < readsPerGoroutine; i++ {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				rt, conn, err := LookupRuntime(cm.instanceName)
+				if err != nil {
+					// "not yet started" or "not registered" — both fine.
+					continue
+				}
+				if rt == nil || conn == nil {
+					t.Errorf("torn read: LookupRuntime returned nil pair without error (rt=%v conn=%v)", rt, conn)
+					return
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
 }
 
 // TestLookupRuntime_Success: a fully-initialised module (runtime + conn set)

@@ -13,14 +13,14 @@ import (
 func TestStreamModuleFactory_TypedModuleTypes(t *testing.T) {
 	f := &eventbus.StreamModuleFactory{}
 	types := f.TypedModuleTypes()
-	if len(types) != 1 || types[0] != "infra.eventbus.stream" {
-		t.Errorf("TypedModuleTypes() = %v, want [infra.eventbus.stream]", types)
+	if len(types) != 1 || types[0] != "eventbus.stream" {
+		t.Errorf("TypedModuleTypes() = %v, want [eventbus.stream]", types)
 	}
 }
 
 func TestStreamModuleFactory_CreateTypedModule_WrongType(t *testing.T) {
 	f := &eventbus.StreamModuleFactory{}
-	_, err := f.CreateTypedModule("infra.eventbus", "x", nil)
+	_, err := f.CreateTypedModule("eventbus.broker", "x", nil)
 	if err == nil {
 		t.Fatal("expected error for wrong type")
 	}
@@ -29,7 +29,7 @@ func TestStreamModuleFactory_CreateTypedModule_WrongType(t *testing.T) {
 func TestStreamModuleFactory_CreateTypedModule_NilConfig(t *testing.T) {
 	f := &eventbus.StreamModuleFactory{}
 	// nil config → StreamConfig zero value → empty name → expect error
-	_, err := f.CreateTypedModule("infra.eventbus.stream", "stream-factory-nil", nil)
+	_, err := f.CreateTypedModule("eventbus.stream", "stream-factory-nil", nil)
 	if err == nil {
 		t.Fatal("expected error from NewStreamModule for empty name")
 	}

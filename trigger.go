@@ -4,13 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"time"
 
-	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/types/known/anypb"
 
 	eventbusv1 "github.com/GoCodeAlone/workflow-plugin-eventbus/gen"
+	"github.com/GoCodeAlone/workflow-plugin-eventbus/providers"
 	sdk "github.com/GoCodeAlone/workflow/plugin/external/sdk"
 )
 
@@ -50,23 +49,26 @@ func (f *SubscribeTriggerModuleFactory) CreateTypedModule(typeName, name string,
 // ── subscribeTrigger (ModuleInstance + TriggerInstance) ──────────────────────
 
 // subscribeTrigger implements sdk.ModuleInstance and sdk.TriggerInstance for the
-// trigger.eventbus.subscribe trigger type. When started with a non-nil callback it
-// subscribes to the configured JetStream stream and invokes cb for each message
-// received. When cb is nil (the external plugin gRPC path), Start is a no-op.
+// trigger.eventbus.subscribe trigger type. When started with a non-nil callback
+// it dispatches RuntimeBroker.Subscribe through the broker named by
+// config.broker_ref (or the single registered broker as a legacy fallback) and
+// invokes cb for each message received. When cb is nil (the external plugin
+// gRPC path), Start is a no-op.
 //
 // The background goroutine is bounded:
 //   - It exits cleanly when the context derived from Stop is cancelled.
-//   - Each fetch has a maxWait cap so the loop wakes up at least once per
-//     fetchPollInterval even when the stream is idle — this ensures timely shutdown.
-//   - Backpressure is handled by the JetStream PullSubscribe+Fetch model:
-//     the goroutine processes one batch synchronously before fetching the next.
+//   - Subscribe blocks until ctx is cancelled or returns an error; on error the
+//     loop pauses for triggerRetryDelay before re-dispatching, so a transient
+//     broker outage does not spin.
+//   - Backpressure is handled by Subscribe semantics: the handler runs
+//     synchronously per message.
 type subscribeTrigger struct {
 	instanceName string
 	config       *eventbusv1.ConsumerConfig
 	cb           sdk.TriggerCallback
 
 	cancel context.CancelFunc // set by Start; nil before first Start
-	done   chan struct{}       // closed when the goroutine exits (nil before first Start with cb)
+	done   chan struct{}      // closed when the goroutine exits (nil before first Start with cb)
 }
 
 // Compile-time assertions.
@@ -75,10 +77,11 @@ var (
 	_ sdk.TriggerInstance = (*subscribeTrigger)(nil)
 )
 
-// fetchPollInterval is the maximum wait per JetStream Fetch call inside the
-// trigger goroutine. Keeping it short ensures the goroutine can detect ctx
-// cancellation quickly without waiting for a full batch timeout.
-const fetchPollInterval = 2 * time.Second
+// triggerRetryDelay is the pause between Subscribe dispatches when the
+// previous Subscribe returned an error (broker unavailable, transient network
+// fault). Short enough to recover quickly, long enough that a wedged broker
+// doesn't spin the goroutine. Mirrors the prior fetchAndFire backoff window.
+const triggerRetryDelay = time.Second
 
 // NewSubscribeTrigger creates a subscribeTrigger from a typed ConsumerConfig proto.
 //
@@ -120,7 +123,7 @@ func (t *subscribeTrigger) Start(ctx context.Context) error {
 	t.cancel = cancel
 	t.done = make(chan struct{})
 
-	go t.fetchLoop(trigCtx)
+	go t.subscribeLoop(trigCtx)
 	return nil
 }
 
@@ -136,109 +139,85 @@ func (t *subscribeTrigger) Stop(_ context.Context) error {
 	return nil
 }
 
-// fetchLoop is the background goroutine that pulls messages from JetStream and
-// invokes the trigger callback. It exits when ctx is cancelled.
-func (t *subscribeTrigger) fetchLoop(ctx context.Context) {
+// subscribeLoop is the background goroutine that dispatches Subscribe through
+// the configured RuntimeBroker. It exits when ctx is cancelled. On Subscribe
+// returning an error (broker not registered yet, dial failure, etc.) it pauses
+// triggerRetryDelay and re-dispatches; this preserves the prior fetchLoop's
+// "keep retrying until the bus is up" behaviour through the new abstraction.
+//
+// Allocation note: a single *time.Timer is reused across retry iterations
+// (Reset between sleeps, drained before Reset to handle the rare-but-
+// possible fire-before-drain race). time.After would allocate a fresh
+// Timer + channel on every failed Subscribe, which compounds when the
+// broker is wedged for an extended period.
+func (t *subscribeTrigger) subscribeLoop(ctx context.Context) {
 	defer close(t.done)
-
-	backoff := time.NewTimer(time.Second)
-	defer backoff.Stop()
-
+	timer := time.NewTimer(triggerRetryDelay)
+	if !timer.Stop() {
+		<-timer.C
+	}
+	defer timer.Stop()
 	for {
-		// Exit immediately on context cancellation before each fetch round.
 		select {
 		case <-ctx.Done():
 			return
 		default:
 		}
-
-		if err := t.fetchAndFire(ctx); err != nil {
-			// Keep retrying — the bus may be temporarily unavailable or the
-			// stream may not exist yet. Drain the backoff timer before resetting
-			// to avoid a spurious immediate fire on the next error.
-			if !backoff.Stop() {
-				select {
-				case <-backoff.C:
-				default:
-				}
+		err := t.dispatchSubscribe(ctx)
+		if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			// Subscribe returned without error or because ctx was cancelled
+			// — exit cleanly. Subscribe's contract is to block until ctx
+			// cancellation, so a nil return is unusual but treated as
+			// completion.
+			return
+		}
+		// Pause before retrying so a wedged broker (e.g., not-yet-started)
+		// doesn't spin the goroutine. Reset the shared timer rather than
+		// allocating a fresh time.After channel on each iteration.
+		timer.Reset(triggerRetryDelay)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
 			}
-			backoff.Reset(time.Second)
-			select {
-			case <-ctx.Done():
-				return
-			case <-backoff.C:
-			}
+			return
+		case <-timer.C:
 		}
 	}
 }
 
-// fetchAndFire dials the bus, fetches one batch of messages, and invokes cb for
-// each one. It returns an error if the connection or fetch fails (the caller
-// retries). A JetStream timeout (empty batch) is not treated as an error.
+// dispatchSubscribe resolves the runtime + connection from the broker
+// instance registry and invokes RuntimeBroker.Subscribe with a handler that
+// shapes each Message into the trigger callback's data map. Returns
+// Subscribe's error (or LookupRuntimeWithFallback's lookup error), to be
+// retried by the surrounding loop.
 //
-// The callback data map mirrors the workflow.plugin.eventbus.v1.Message proto:
+// The callback data map mirrors workflow.plugin.eventbus.v1.Message:
 // "subject", "payload" ([]byte), "headers" (map[string]string), "sequence",
 // "published_at", "ack_token".
-func (t *subscribeTrigger) fetchAndFire(ctx context.Context) error {
-	nc, err := DefaultBusConn()
+func (t *subscribeTrigger) dispatchSubscribe(ctx context.Context) error {
+	rb, conn, err := LookupRuntimeWithFallback(t.config.GetBrokerRef())
 	if err != nil {
-		return fmt.Errorf("trigger.eventbus.subscribe %q: get bus connection: %w", t.instanceName, err)
+		return fmt.Errorf("trigger.eventbus.subscribe %q: %w", t.instanceName, err)
 	}
 
-	js, err := nc.JetStream(nats.Context(ctx))
-	if err != nil {
-		return fmt.Errorf("trigger.eventbus.subscribe %q: jetstream context: %w", t.instanceName, err)
-	}
-
-	subj := t.config.GetFilterSubject()
-	opts := []nats.SubOpt{nats.BindStream(t.config.GetStreamName())}
-	sub, err := js.PullSubscribe(subj, t.config.GetName(), opts...)
-	if err != nil {
-		return fmt.Errorf("trigger.eventbus.subscribe %q: pull subscribe: %w", t.instanceName, err)
-	}
-	defer sub.Drain() //nolint:errcheck // best-effort; ephemeral per-fetch subscription
-
-	msgs, err := sub.Fetch(1, nats.MaxWait(fetchPollInterval))
-	if err != nil {
-		if errors.Is(err, nats.ErrTimeout) {
-			return nil // no messages — normal idle case
-		}
-		return fmt.Errorf("trigger.eventbus.subscribe %q: fetch: %w", t.instanceName, err)
-	}
-
-	for _, m := range msgs {
-		// Build a typed Message to ensure field names and types match the proto contract:
-		// workflow.plugin.eventbus.v1.Message (subject, payload, headers, sequence,
-		// published_at, ack_token). This mirrors ConsumeHandler in steps/consume.go.
-		pbMsg := &eventbusv1.Message{
-			Subject:  m.Subject,
-			Payload:  m.Data,  // []byte — not string; proto field type is bytes
-			AckToken: m.Reply, // NATS reply subject used as ack_token
-		}
-		if len(m.Header) > 0 {
-			pbMsg.Headers = make(map[string]string, len(m.Header))
-			for k, vals := range m.Header {
-				if len(vals) > 0 {
-					pbMsg.Headers[k] = vals[0]
-				}
-			}
-		}
-		if meta, err := m.Metadata(); err == nil && meta != nil {
-			pbMsg.Sequence = strconv.FormatUint(meta.Sequence.Stream, 10)
-			pbMsg.PublishedAt = meta.Timestamp.UTC().Format(time.RFC3339)
-		}
-
+	handler := providers.MessageHandler(func(_ context.Context, msg *eventbusv1.Message) error {
 		data := map[string]any{
-			"subject":      pbMsg.Subject,
-			"payload":      pbMsg.Payload,
-			"headers":      pbMsg.Headers,
-			"sequence":     pbMsg.Sequence,
-			"published_at": pbMsg.PublishedAt,
-			"ack_token":    pbMsg.AckToken,
+			"subject":      msg.GetSubject(),
+			"payload":      msg.GetPayload(),
+			"headers":      msg.GetHeaders(),
+			"sequence":     msg.GetSequence(),
+			"published_at": msg.GetPublishedAt(),
+			"ack_token":    msg.GetAckToken(),
 		}
-		if err := t.cb("message", data); err != nil {
-			return fmt.Errorf("trigger.eventbus.subscribe %q: callback: %w", t.instanceName, err)
+		if cbErr := t.cb("message", data); cbErr != nil {
+			return fmt.Errorf("trigger.eventbus.subscribe %q: callback: %w", t.instanceName, cbErr)
 		}
+		return nil
+	})
+
+	if err := rb.Subscribe(ctx, conn, t.config.GetStreamName(), t.config.GetName(), handler); err != nil {
+		return fmt.Errorf("trigger.eventbus.subscribe %q: subscribe: %w", t.instanceName, err)
 	}
 	return nil
 }

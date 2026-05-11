@@ -83,6 +83,27 @@ message ClusterConfig {
   KinesisConfig kinesis = 7;
   // limits sets compute/storage resource limits for the cluster containers.
   ResourceLimits limits = 8;
+  reserved 9;
+  // dsn is the provider-specific connection string for the runtime broker:
+  //   - provider="pgchannel": Postgres DSN (required).
+  //   - provider="nats":      NATS URL (e.g., "nats://host:4222"); when empty
+  //                           falls back to env-resolved URIs in busURIRegistry
+  //                           (legacy NATS_URL / EVENTBUS_<NAME>_URI flow).
+  //   - other providers:      ignored.
+  string dsn = 10;
+  // poll_interval is the polling fallback interval for the pg-backed provider
+  // (Go duration string, default "1s"). Ignored for non-pgchannel providers.
+  string poll_interval = 11;
+  // broker_target is the broker deployment target. Replaces deploy_target's
+  // role for non-IaC providers. Valid values: "in_process" (pgchannel only),
+  // or any existing deploy_target value for IaC-managed providers (NATS, etc.).
+  string broker_target = 12;
+  // max_conns is the pgxpool MaxConns ceiling for the pg-backed provider
+  // (default 16). Each Subscribe holds 2 connections persistently (advisory
+  // lock + LISTEN); for N consumers the recommended setting is >= 2*N + 4
+  // to leave headroom for Publish/Ack/Ensure transients. Ignored for
+  // non-pgchannel providers.
+  int32 max_conns = 13;
 }
 
 // JetStreamConfig holds NATS JetStream-specific settings.
@@ -148,6 +169,11 @@ message StreamConfig {
   google.protobuf.Duration max_age = 6;
   // ack_wait is the default acknowledgement deadline for consumers on this stream.
   google.protobuf.Duration ack_wait = 7;
+  reserved 8, 9;
+  // broker_ref names the broker module instance this stream binds to.
+  // Required for runtime routing through RuntimeBroker; validated by the
+  // streamModule at Start time (not proto-required to keep wire format compatible).
+  string broker_ref = 10;
 }
 
 // ConsumerConfig is the typed config for infra.eventbus.consumer module
@@ -165,6 +191,11 @@ message ConsumerConfig {
   AckPolicy ack_policy = 5;
   // max_deliver is the maximum number of delivery attempts before NACKing (0 = unlimited).
   int32 max_deliver = 6;
+  reserved 8, 9;
+  // broker_ref names the broker module instance this consumer binds to.
+  // Required for runtime routing through RuntimeBroker; validated by the
+  // consumerModule at Start time (not proto-required to keep wire format compatible).
+  string broker_ref = 10;
 }
 
 // ─── step inputs / outputs ────────────────────────────────────────────────────
@@ -179,6 +210,10 @@ message PublishRequest {
   map<string, string> headers = 3;
   // correlation_id is an opaque identifier for request/reply correlation or tracing.
   string correlation_id = 4;
+  // broker_ref names the broker module instance to dispatch this publish through.
+  // Required for routing via RuntimeBroker; the step factory uses this to look up
+  // the registered broker runtime + connection.
+  string broker_ref = 5;
 }
 
 // PublishResponse is the output from step.eventbus.publish.
@@ -197,6 +232,10 @@ message ConsumeRequest {
   int32 batch_size = 2;
   // max_wait is the maximum time to block waiting for messages.
   google.protobuf.Duration max_wait = 3;
+  // broker_ref names the broker module instance to dispatch this consume through.
+  // Required for routing via RuntimeBroker; the step factory uses this to look up
+  // the registered broker runtime + connection.
+  string broker_ref = 4;
 }
 
 // ConsumeResponse is the output from step.eventbus.consume.
@@ -225,6 +264,10 @@ message Message {
 message AckRequest {
   // ack_token is the opaque acknowledgement token from Message.ack_token.
   string ack_token = 1;
+  // broker_ref names the broker module instance to dispatch this ack through.
+  // Required for routing via RuntimeBroker; the step factory uses this to look up
+  // the registered broker runtime + connection.
+  string broker_ref = 2;
 }
 
 // AckResponse is the output from step.eventbus.ack.

@@ -172,19 +172,19 @@ func (p *eventbusPlugin) ContractRegistry() *pb.ContractRegistry {
 			// ── modules ───────────────────────────────────────────────────────
 			{
 				Kind:          pb.ContractKind_CONTRACT_KIND_MODULE,
-				ModuleType:    "infra.eventbus",
+				ModuleType:    "eventbus.broker",
 				ConfigMessage: "workflow.plugin.eventbus.v1.ClusterConfig",
 				Mode:          strict,
 			},
 			{
 				Kind:          pb.ContractKind_CONTRACT_KIND_MODULE,
-				ModuleType:    "infra.eventbus.stream",
+				ModuleType:    "eventbus.stream",
 				ConfigMessage: "workflow.plugin.eventbus.v1.StreamConfig",
 				Mode:          strict,
 			},
 			{
 				Kind:          pb.ContractKind_CONTRACT_KIND_MODULE,
-				ModuleType:    "infra.eventbus.consumer",
+				ModuleType:    "eventbus.consumer",
 				ConfigMessage: "workflow.plugin.eventbus.v1.ConsumerConfig",
 				Mode:          strict,
 			},

@@ -3,7 +3,13 @@ package eventbus_test
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
+	"time"
+
+	tcgo "github.com/testcontainers/testcontainers-go"
+	postgrestc "github.com/testcontainers/testcontainers-go/modules/postgres"
+	"github.com/testcontainers/testcontainers-go/wait"
 
 	eventbus "github.com/GoCodeAlone/workflow-plugin-eventbus"
 	eventbusv1 "github.com/GoCodeAlone/workflow-plugin-eventbus/gen"
@@ -14,14 +20,14 @@ import (
 func TestClusterModuleFactory_TypedModuleTypes(t *testing.T) {
 	f := &eventbus.ClusterModuleFactory{}
 	types := f.TypedModuleTypes()
-	if len(types) != 1 || types[0] != "infra.eventbus" {
-		t.Errorf("TypedModuleTypes() = %v, want [infra.eventbus]", types)
+	if len(types) != 1 || types[0] != "eventbus.broker" {
+		t.Errorf("TypedModuleTypes() = %v, want [eventbus.broker]", types)
 	}
 }
 
 func TestClusterModuleFactory_CreateTypedModule_WrongType(t *testing.T) {
 	f := &eventbus.ClusterModuleFactory{}
-	_, err := f.CreateTypedModule("infra.eventbus.stream", "x", nil)
+	_, err := f.CreateTypedModule("eventbus.stream", "x", nil)
 	if err == nil {
 		t.Fatal("expected error for wrong type")
 	}
@@ -30,7 +36,7 @@ func TestClusterModuleFactory_CreateTypedModule_WrongType(t *testing.T) {
 func TestClusterModuleFactory_CreateTypedModule_NilConfig(t *testing.T) {
 	f := &eventbus.ClusterModuleFactory{}
 	// nil config → ClusterConfig zero value → empty provider → expect error
-	_, err := f.CreateTypedModule("infra.eventbus", "bus-factory-nil", nil)
+	_, err := f.CreateTypedModule("eventbus.broker", "bus-factory-nil", nil)
 	if err == nil {
 		t.Fatal("expected error from NewClusterModule for empty provider")
 	}
@@ -221,5 +227,230 @@ func TestClusterModule_StopEvictsNATSConn(t *testing.T) {
 	_, inCacheAfter := eventbus.GetNATSConn("bus-conn-evict")
 	if inCacheAfter {
 		t.Fatal("expected sentinel evicted from cache after Stop")
+	}
+}
+
+// ── broker instance registry + LookupRuntime ─────────────────────────────────
+//
+// Tests of LookupBrokerInstance / LookupRuntime semantics that don't need to
+// hand-construct a *clusterModule (which is unexported) live here. Construction-
+// dependent tests live in module_internal_test.go alongside the package types.
+
+func TestBrokerInstanceRegistry_LookupNotFound(t *testing.T) {
+	if m, ok := eventbus.LookupBrokerInstance("does-not-exist"); ok || m != nil {
+		t.Fatalf("expected (nil, false) for unknown name; got (%v, %v)", m, ok)
+	}
+}
+
+func TestLookupRuntime_NotRegistered(t *testing.T) {
+	_, _, err := eventbus.LookupRuntime("not-registered-broker")
+	if err == nil {
+		t.Fatal("expected error for unregistered broker")
+	}
+	if !strings.Contains(err.Error(), "not registered") {
+		t.Errorf("error = %q, want substring \"not registered\"", err.Error())
+	}
+}
+
+// ── Start runtime selection (legacy nats fallback) ───────────────────────────
+//
+// TestClusterModule_StartSelectsNats verifies the provider==nats branch of
+// Start: a NATS URL is required (cfg.Dsn or NATS_URL env fallback). The test
+// skips when no NATS broker is reachable so it can run on developer laptops
+// without infrastructure.
+func TestClusterModule_StartSelectsNats(t *testing.T) {
+	natsURL := os.Getenv("NATS_URL")
+	if natsURL == "" {
+		t.Skip("NATS_URL not set; skipping live-broker Start test")
+	}
+
+	cfg := &eventbusv1.ClusterConfig{
+		Provider:     "nats",
+		DeployTarget: "digitalocean.app_platform",
+		Dsn:          natsURL,
+	}
+	m, err := eventbus.NewClusterModule("bus-start-nats", cfg)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := m.Init(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Stop(context.Background()) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := m.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	rt, conn, err := eventbus.LookupRuntime("bus-start-nats")
+	if err != nil {
+		t.Fatalf("LookupRuntime after Start: %v", err)
+	}
+	if rt == nil || conn == nil {
+		t.Fatal("expected non-nil runtime + conn after Start")
+	}
+	if got := conn.Provider(); got != "nats" {
+		t.Errorf("Connection.Provider() = %q, want \"nats\"", got)
+	}
+}
+
+// ── Per-provider validation (Task 9.5) ───────────────────────────────────────
+//
+// NewClusterModule's validation diverges by provider — pgchannel rejects
+// deploy_target-style configs and requires broker_target + dsn; nats/kafka/
+// kinesis continue to require deploy_target as before.
+
+func TestNewClusterModule_PgchannelRequiresBrokerTarget(t *testing.T) {
+	cfg := &eventbusv1.ClusterConfig{
+		Provider: "pgchannel",
+		Dsn:      "postgres://x@y/z",
+		// BrokerTarget intentionally omitted
+	}
+	_, err := eventbus.NewClusterModule("bus-pg-no-target", cfg)
+	if err == nil {
+		t.Fatal("expected error when pgchannel broker_target is missing")
+	}
+	if !strings.Contains(err.Error(), "broker_target=in_process") {
+		t.Errorf("error = %q, want substring \"broker_target=in_process\"", err.Error())
+	}
+}
+
+func TestNewClusterModule_PgchannelRequiresDsn(t *testing.T) {
+	cfg := &eventbusv1.ClusterConfig{
+		Provider:     "pgchannel",
+		BrokerTarget: "in_process",
+		// Dsn intentionally omitted
+	}
+	_, err := eventbus.NewClusterModule("bus-pg-no-dsn", cfg)
+	if err == nil {
+		t.Fatal("expected error when pgchannel dsn is missing")
+	}
+	if !strings.Contains(err.Error(), "dsn") {
+		t.Errorf("error = %q, want substring \"dsn\"", err.Error())
+	}
+}
+
+func TestNewClusterModule_PgchannelValid(t *testing.T) {
+	cfg := &eventbusv1.ClusterConfig{
+		Provider:     "pgchannel",
+		BrokerTarget: "in_process",
+		Dsn:          "postgres://eventbus:eventbus@localhost:5432/eventbus_test",
+	}
+	m, err := eventbus.NewClusterModule("bus-pg-valid", cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if m == nil {
+		t.Fatal("expected non-nil module")
+	}
+}
+
+func TestNewClusterModule_NatsStillRequiresDeployTarget(t *testing.T) {
+	cfg := &eventbusv1.ClusterConfig{
+		Provider: "nats",
+		// DeployTarget intentionally omitted
+	}
+	_, err := eventbus.NewClusterModule("bus-nats-no-target", cfg)
+	if err == nil {
+		t.Fatal("expected error when nats deploy_target is missing")
+	}
+	if !strings.Contains(err.Error(), "deploy_target") {
+		t.Errorf("error = %q, want substring \"deploy_target\"", err.Error())
+	}
+}
+
+func TestNewClusterModule_UnsupportedProvider(t *testing.T) {
+	cfg := &eventbusv1.ClusterConfig{
+		Provider:     "redis",
+		DeployTarget: "digitalocean.app_platform",
+	}
+	_, err := eventbus.NewClusterModule("bus-redis", cfg)
+	if err == nil {
+		t.Fatal("expected error for unsupported provider")
+	}
+	if !strings.Contains(err.Error(), "unsupported provider") {
+		t.Errorf("error = %q, want substring \"unsupported provider\"", err.Error())
+	}
+}
+
+// ── Start runtime selection (pgchannel — live container) ─────────────────────
+//
+// TestClusterModule_StartSelectsPgchannel verifies the provider==pgchannel
+// branch of Start: cfg.Dsn carries a Postgres DSN; broker_target is
+// "in_process". Uses testcontainers Postgres inline because the pgchannel
+// testutil lives in internal/testutil and is unimportable from this
+// external test package. Skips when Docker is unavailable.
+func TestClusterModule_StartSelectsPgchannel(t *testing.T) {
+	tcgo.SkipIfProviderIsNotHealthy(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	container, err := postgrestc.Run(ctx,
+		"postgres:16-alpine",
+		postgrestc.WithDatabase("eventbus_test"),
+		postgrestc.WithUsername("eventbus"),
+		postgrestc.WithPassword("eventbus"),
+		tcgo.WithWaitStrategy(
+			wait.ForLog("database system is ready to accept connections").
+				WithOccurrence(2).
+				WithStartupTimeout(60*time.Second),
+		),
+	)
+	if err != nil {
+		t.Fatalf("start postgres container: %v", err)
+	}
+	t.Cleanup(func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer stopCancel()
+		_ = container.Terminate(stopCtx)
+	})
+	dsn, err := container.ConnectionString(ctx, "sslmode=disable")
+	if err != nil {
+		t.Fatalf("container connection string: %v", err)
+	}
+
+	cfg := &eventbusv1.ClusterConfig{
+		Provider:     "pgchannel",
+		BrokerTarget: "in_process",
+		Dsn:          dsn,
+	}
+	m, err := eventbus.NewClusterModule("bus-start-pg", cfg)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := m.Init(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	// Stop guard: register cleanup before Start so a Start failure still
+	// triggers cleanup of any partial state. Stop is idempotent.
+	t.Cleanup(func() { _ = m.Stop(context.Background()) })
+
+	startCtx, startCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer startCancel()
+	if err := m.Start(startCtx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	rt, conn, err := eventbus.LookupRuntime("bus-start-pg")
+	if err != nil {
+		t.Fatalf("LookupRuntime after Start: %v", err)
+	}
+	if rt == nil || conn == nil {
+		t.Fatal("expected non-nil runtime + conn after Start")
+	}
+	if got := conn.Provider(); got != "pgchannel" {
+		t.Errorf("Connection.Provider() = %q, want \"pgchannel\"", got)
+	}
+
+	// After Stop the broker should be unregistered and LookupRuntime should
+	// fail with "not registered".
+	if err := m.Stop(context.Background()); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if _, _, err := eventbus.LookupRuntime("bus-start-pg"); err == nil {
+		t.Fatal("expected LookupRuntime to fail after Stop")
 	}
 }

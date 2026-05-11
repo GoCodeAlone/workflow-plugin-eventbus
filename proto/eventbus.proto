@@ -83,16 +83,17 @@ message ClusterConfig {
   KinesisConfig kinesis = 7;
   // limits sets compute/storage resource limits for the cluster containers.
   ResourceLimits limits = 8;
+  reserved 9;
   // dsn is the Postgres DSN for the pg-backed provider (required when provider=pgchannel).
   // Ignored for non-pgchannel providers.
-  optional string dsn = 10;
+  string dsn = 10;
   // poll_interval is the polling fallback interval for the pg-backed provider
   // (Go duration string, default "1s"). Ignored for non-pgchannel providers.
-  optional string poll_interval = 11;
+  string poll_interval = 11;
   // broker_target is the broker deployment target. Replaces deploy_target's
   // role for non-IaC providers. Valid values: "in_process" (pgchannel only),
   // or any existing deploy_target value for IaC-managed providers (NATS, etc.).
-  optional string broker_target = 12;
+  string broker_target = 12;
 }
 
 // JetStreamConfig holds NATS JetStream-specific settings.
@@ -158,6 +159,7 @@ message StreamConfig {
   google.protobuf.Duration max_age = 6;
   // ack_wait is the default acknowledgement deadline for consumers on this stream.
   google.protobuf.Duration ack_wait = 7;
+  reserved 8, 9;
   // broker_ref names the broker module instance this stream binds to.
   // Required for runtime routing through RuntimeBroker; validated by the
   // streamModule at Start time (not proto-required to keep wire format compatible).
@@ -179,6 +181,7 @@ message ConsumerConfig {
   AckPolicy ack_policy = 5;
   // max_deliver is the maximum number of delivery attempts before NACKing (0 = unlimited).
   int32 max_deliver = 6;
+  reserved 8, 9;
   // broker_ref names the broker module instance this consumer binds to.
   // Required for runtime routing through RuntimeBroker; validated by the
   // consumerModule at Start time (not proto-required to keep wire format compatible).

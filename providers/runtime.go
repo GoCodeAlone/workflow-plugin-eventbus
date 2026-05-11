@@ -49,6 +49,13 @@ type RuntimeBroker interface {
 	// ctx is cancelled or an unrecoverable error occurs. Returning nil from
 	// handler acks the message; returning an error naks it (delivery counted
 	// against max_deliver per ConsumerConfig).
+	//
+	// TODO(Group F): this signature conflates pull semantics (step.eventbus.consume,
+	// which wants a bounded batch + max_wait) with push semantics (trigger.eventbus.subscribe,
+	// which wants a long-lived blocking handler loop). Split into Subscribe (push)
+	// and Pull (returns *ConsumeResponse for a single batch) when step factories
+	// are refactored. Also: take *ConsumeRequest instead of streamName+consumerName
+	// positional args (review I2).
 	Subscribe(ctx context.Context, conn Connection, streamName, consumerName string, handler MessageHandler) error
 
 	// Ack acknowledges a previously delivered message identified by ackToken

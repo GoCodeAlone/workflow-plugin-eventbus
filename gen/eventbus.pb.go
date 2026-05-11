@@ -330,14 +330,14 @@ type ClusterConfig struct {
 	Limits *ResourceLimits `protobuf:"bytes,8,opt,name=limits,proto3" json:"limits,omitempty"`
 	// dsn is the Postgres DSN for the pg-backed provider (required when provider=pgchannel).
 	// Ignored for non-pgchannel providers.
-	Dsn *string `protobuf:"bytes,10,opt,name=dsn,proto3,oneof" json:"dsn,omitempty"`
+	Dsn string `protobuf:"bytes,10,opt,name=dsn,proto3" json:"dsn,omitempty"`
 	// poll_interval is the polling fallback interval for the pg-backed provider
 	// (Go duration string, default "1s"). Ignored for non-pgchannel providers.
-	PollInterval *string `protobuf:"bytes,11,opt,name=poll_interval,json=pollInterval,proto3,oneof" json:"poll_interval,omitempty"`
+	PollInterval string `protobuf:"bytes,11,opt,name=poll_interval,json=pollInterval,proto3" json:"poll_interval,omitempty"`
 	// broker_target is the broker deployment target. Replaces deploy_target's
 	// role for non-IaC providers. Valid values: "in_process" (pgchannel only),
 	// or any existing deploy_target value for IaC-managed providers (NATS, etc.).
-	BrokerTarget  *string `protobuf:"bytes,12,opt,name=broker_target,json=brokerTarget,proto3,oneof" json:"broker_target,omitempty"`
+	BrokerTarget  string `protobuf:"bytes,12,opt,name=broker_target,json=brokerTarget,proto3" json:"broker_target,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -429,22 +429,22 @@ func (x *ClusterConfig) GetLimits() *ResourceLimits {
 }
 
 func (x *ClusterConfig) GetDsn() string {
-	if x != nil && x.Dsn != nil {
-		return *x.Dsn
+	if x != nil {
+		return x.Dsn
 	}
 	return ""
 }
 
 func (x *ClusterConfig) GetPollInterval() string {
-	if x != nil && x.PollInterval != nil {
-		return *x.PollInterval
+	if x != nil {
+		return x.PollInterval
 	}
 	return ""
 }
 
 func (x *ClusterConfig) GetBrokerTarget() string {
-	if x != nil && x.BrokerTarget != nil {
-		return *x.BrokerTarget
+	if x != nil {
+		return x.BrokerTarget
 	}
 	return ""
 }
@@ -1396,7 +1396,7 @@ var File_eventbus_proto protoreflect.FileDescriptor
 
 const file_eventbus_proto_rawDesc = "" +
 	"\n" +
-	"\x0eeventbus.proto\x12\x1bworkflow.plugin.eventbus.v1\x1a\x1egoogle/protobuf/duration.proto\"\xb4\x04\n" +
+	"\x0eeventbus.proto\x12\x1bworkflow.plugin.eventbus.v1\x1a\x1egoogle/protobuf/duration.proto\"\xff\x03\n" +
 	"\rClusterConfig\x12\x1a\n" +
 	"\bprovider\x18\x01 \x01(\tR\bprovider\x12#\n" +
 	"\rdeploy_target\x18\x02 \x01(\tR\fdeployTarget\x12\x18\n" +
@@ -1405,14 +1405,12 @@ const file_eventbus_proto_rawDesc = "" +
 	"\tjetstream\x18\x05 \x01(\v2,.workflow.plugin.eventbus.v1.JetStreamConfigR\tjetstream\x12>\n" +
 	"\x05kafka\x18\x06 \x01(\v2(.workflow.plugin.eventbus.v1.KafkaConfigR\x05kafka\x12D\n" +
 	"\akinesis\x18\a \x01(\v2*.workflow.plugin.eventbus.v1.KinesisConfigR\akinesis\x12C\n" +
-	"\x06limits\x18\b \x01(\v2+.workflow.plugin.eventbus.v1.ResourceLimitsR\x06limits\x12\x15\n" +
+	"\x06limits\x18\b \x01(\v2+.workflow.plugin.eventbus.v1.ResourceLimitsR\x06limits\x12\x10\n" +
 	"\x03dsn\x18\n" +
-	" \x01(\tH\x00R\x03dsn\x88\x01\x01\x12(\n" +
-	"\rpoll_interval\x18\v \x01(\tH\x01R\fpollInterval\x88\x01\x01\x12(\n" +
-	"\rbroker_target\x18\f \x01(\tH\x02R\fbrokerTarget\x88\x01\x01B\x06\n" +
-	"\x04_dsnB\x10\n" +
-	"\x0e_poll_intervalB\x10\n" +
-	"\x0e_broker_target\"\xb5\x01\n" +
+	" \x01(\tR\x03dsn\x12#\n" +
+	"\rpoll_interval\x18\v \x01(\tR\fpollInterval\x12#\n" +
+	"\rbroker_target\x18\f \x01(\tR\fbrokerTargetJ\x04\b\t\x10\n" +
+	"\"\xb5\x01\n" +
 	"\x0fJetStreamConfig\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12*\n" +
 	"\x11max_storage_bytes\x18\x02 \x01(\x03R\x0fmaxStorageBytes\x12(\n" +
@@ -1432,7 +1430,7 @@ const file_eventbus_proto_rawDesc = "" +
 	"\x0eResourceLimits\x12\x10\n" +
 	"\x03cpu\x18\x01 \x01(\tR\x03cpu\x12\x16\n" +
 	"\x06memory\x18\x02 \x01(\tR\x06memory\x12\x18\n" +
-	"\astorage\x18\x03 \x01(\tR\astorage\"\xe0\x02\n" +
+	"\astorage\x18\x03 \x01(\tR\astorage\"\xec\x02\n" +
 	"\fStreamConfig\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1a\n" +
 	"\bsubjects\x18\x02 \x03(\tR\bsubjects\x12W\n" +
@@ -1443,7 +1441,8 @@ const file_eventbus_proto_rawDesc = "" +
 	"\back_wait\x18\a \x01(\v2\x19.google.protobuf.DurationR\aackWait\x12\x1d\n" +
 	"\n" +
 	"broker_ref\x18\n" +
-	" \x01(\tR\tbrokerRef\"\xc6\x02\n" +
+	" \x01(\tR\tbrokerRefJ\x04\b\b\x10\tJ\x04\b\t\x10\n" +
+	"\"\xd2\x02\n" +
 	"\x0eConsumerConfig\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1f\n" +
 	"\vstream_name\x18\x02 \x01(\tR\n" +
@@ -1456,7 +1455,8 @@ const file_eventbus_proto_rawDesc = "" +
 	"maxDeliver\x12\x1d\n" +
 	"\n" +
 	"broker_ref\x18\n" +
-	" \x01(\tR\tbrokerRef\"\x9a\x02\n" +
+	" \x01(\tR\tbrokerRefJ\x04\b\b\x10\tJ\x04\b\t\x10\n" +
+	"\"\x9a\x02\n" +
 	"\x0ePublishRequest\x12\x18\n" +
 	"\asubject\x18\x01 \x01(\tR\asubject\x12\x18\n" +
 	"\apayload\x18\x02 \x01(\fR\apayload\x12R\n" +
@@ -1591,7 +1591,6 @@ func file_eventbus_proto_init() {
 	if File_eventbus_proto != nil {
 		return
 	}
-	file_eventbus_proto_msgTypes[0].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

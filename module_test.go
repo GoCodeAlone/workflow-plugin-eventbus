@@ -3,7 +3,9 @@ package eventbus_test
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
+	"time"
 
 	eventbus "github.com/GoCodeAlone/workflow-plugin-eventbus"
 	eventbusv1 "github.com/GoCodeAlone/workflow-plugin-eventbus/gen"
@@ -223,3 +225,74 @@ func TestClusterModule_StopEvictsNATSConn(t *testing.T) {
 		t.Fatal("expected sentinel evicted from cache after Stop")
 	}
 }
+
+// ── broker instance registry + LookupRuntime ─────────────────────────────────
+//
+// Tests of LookupBrokerInstance / LookupRuntime semantics that don't need to
+// hand-construct a *clusterModule (which is unexported) live here. Construction-
+// dependent tests live in module_internal_test.go alongside the package types.
+
+func TestBrokerInstanceRegistry_LookupNotFound(t *testing.T) {
+	if m, ok := eventbus.LookupBrokerInstance("does-not-exist"); ok || m != nil {
+		t.Fatalf("expected (nil, false) for unknown name; got (%v, %v)", m, ok)
+	}
+}
+
+func TestLookupRuntime_NotRegistered(t *testing.T) {
+	_, _, err := eventbus.LookupRuntime("not-registered-broker")
+	if err == nil {
+		t.Fatal("expected error for unregistered broker")
+	}
+	if !strings.Contains(err.Error(), "not registered") {
+		t.Errorf("error = %q, want substring \"not registered\"", err.Error())
+	}
+}
+
+// ── Start runtime selection (legacy nats fallback) ───────────────────────────
+//
+// TestClusterModule_StartSelectsNats verifies the provider==nats branch of
+// Start: a NATS URL is required (cfg.Dsn or NATS_URL env fallback). The test
+// skips when no NATS broker is reachable so it can run on developer laptops
+// without infrastructure.
+func TestClusterModule_StartSelectsNats(t *testing.T) {
+	natsURL := os.Getenv("NATS_URL")
+	if natsURL == "" {
+		t.Skip("NATS_URL not set; skipping live-broker Start test")
+	}
+
+	cfg := &eventbusv1.ClusterConfig{
+		Provider:     "nats",
+		DeployTarget: "digitalocean.app_platform",
+		Dsn:          natsURL,
+	}
+	m, err := eventbus.NewClusterModule("bus-start-nats", cfg)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := m.Init(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Stop(context.Background()) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := m.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	rt, conn, err := eventbus.LookupRuntime("bus-start-nats")
+	if err != nil {
+		t.Fatalf("LookupRuntime after Start: %v", err)
+	}
+	if rt == nil || conn == nil {
+		t.Fatal("expected non-nil runtime + conn after Start")
+	}
+	if got := conn.Provider(); got != "nats" {
+		t.Errorf("Connection.Provider() = %q, want \"nats\"", got)
+	}
+}
+
+// TestClusterModule_StartSelectsPgchannel lives in module_test.go alongside
+// the nats counterpart but depends on the per-provider validation relaxation
+// (Task 9.5) — pgchannel configs omit deploy_target and require broker_target
+// instead. The test is added in the validation-change commit.

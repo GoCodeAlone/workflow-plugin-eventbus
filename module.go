@@ -17,6 +17,8 @@ import (
 
 	eventbusv1 "github.com/GoCodeAlone/workflow-plugin-eventbus/gen"
 	"github.com/GoCodeAlone/workflow-plugin-eventbus/providers"
+	natsruntime "github.com/GoCodeAlone/workflow-plugin-eventbus/providers/nats"
+	pgchannelruntime "github.com/GoCodeAlone/workflow-plugin-eventbus/providers/pgchannel"
 	sdk "github.com/GoCodeAlone/workflow/plugin/external/sdk"
 )
 
@@ -78,6 +80,57 @@ func UnregisterBusURI(instanceName string) {
 	urlMu.Lock()
 	defer urlMu.Unlock()
 	delete(busURIRegistry, instanceName)
+}
+
+// ── broker instance registry ──────────────────────────────────────────────────
+
+// brokerInstanceRegistry maps broker module instance names to their loaded
+// *clusterModule. Stream + consumer modules look up their broker by name via
+// LookupRuntime to get the runtime + cached Connection.
+//
+// Registration happens in clusterModule.Start (after runtime.Connect succeeds)
+// and removal in clusterModule.Stop. Lookups before Start return "not yet
+// started" so callers see a clear lifecycle error rather than a nil deref.
+var brokerInstanceRegistry sync.Map // string → *clusterModule
+
+// RegisterBrokerInstance stores m under name. Exported so integration tests
+// can pre-seed the registry with a hand-built clusterModule.
+func RegisterBrokerInstance(name string, m *clusterModule) {
+	brokerInstanceRegistry.Store(name, m)
+}
+
+// UnregisterBrokerInstance removes the entry for name. Idempotent.
+func UnregisterBrokerInstance(name string) { brokerInstanceRegistry.Delete(name) }
+
+// LookupBrokerInstance returns the *clusterModule registered under name, or
+// false when absent. Primarily for tests; production callers should use
+// LookupRuntime, which also validates that Start has run.
+func LookupBrokerInstance(name string) (*clusterModule, bool) {
+	v, ok := brokerInstanceRegistry.Load(name)
+	if !ok {
+		return nil, false
+	}
+	return v.(*clusterModule), true
+}
+
+// LookupRuntime returns the RuntimeBroker + cached Connection for the named
+// broker. Used by stream/consumer modules' Start (Group E) and by step
+// factories + the trigger module (Group F) to dispatch through the provider
+// abstraction.
+//
+// Returns an error when:
+//   - no broker module is registered under name (Init never ran or wrong name);
+//   - the broker module is registered but Start has not yet completed
+//     (runtime/conn are still nil).
+func LookupRuntime(name string) (providers.RuntimeBroker, providers.Connection, error) {
+	m, ok := LookupBrokerInstance(name)
+	if !ok {
+		return nil, nil, fmt.Errorf("eventbus.broker %q not registered", name)
+	}
+	if m.runtime == nil || m.conn == nil {
+		return nil, nil, fmt.Errorf("eventbus.broker %q: not yet started (runtime/conn nil)", name)
+	}
+	return m.runtime, m.conn, nil
 }
 
 // ── NATS connection cache ─────────────────────────────────────────────────────
@@ -236,10 +289,22 @@ func (f *ClusterModuleFactory) CreateTypedModule(typeName, name string, config *
 
 // clusterModule implements sdk.ModuleInstance for the infra.eventbus module type.
 // It validates the ClusterConfig, registers the config and broker URI on Init(),
-// and closes the cached NATS connection on Stop().
+// selects a provider runtime + opens a connection on Start(), and tears both
+// down on Stop().
+//
+// The runtime + conn fields are populated by Start() based on config.Provider.
+// They are nil before Start runs; LookupRuntime guards against that state so
+// callers see a clear lifecycle error rather than a nil deref.
 type clusterModule struct {
 	instanceName string
 	config       *eventbusv1.ClusterConfig
+
+	// runtime is the provider-specific RuntimeBroker selected at Start time.
+	// nil before Start, nil after Stop.
+	runtime providers.RuntimeBroker
+	// conn is the live broker Connection opened via runtime.Connect at Start.
+	// nil before Start, nil after Stop.
+	conn providers.Connection
 }
 
 // Compile-time assertion: clusterModule implements sdk.ModuleInstance.
@@ -288,14 +353,90 @@ func (m *clusterModule) Init() error {
 	return nil
 }
 
-// Start is a no-op; NATS connections are established lazily by GetOrDialNATSConn.
-func (m *clusterModule) Start(_ context.Context) error { return nil }
+// Start selects a provider runtime based on m.config.Provider, opens a
+// broker Connection, and registers the module in the broker-instance
+// registry so stream/consumer/step callers can resolve the runtime by
+// instance name.
+//
+// Provider selection:
+//   - "nats"      → providers/nats.NewRuntime()
+//   - "pgchannel" → providers/pgchannel.NewRuntime()
+//   - anything else → error
+//
+// DSN resolution for nats:
+//
+//	The runtime expects cfg.Dsn to carry the broker URL. The legacy Init()
+//	resolves env-var URIs into the busURIRegistry. When provider is "nats"
+//	and cfg.Dsn is empty we fall back to that registry so legacy
+//	NATS_URL/EVENTBUS_<NAME>_URI flows keep working. The cfg pointer is
+//	mutated in-place because clusterModule owns it.
+//
+// Step factories and the trigger module still use the legacy
+// nats.Conn-direct path (GetOrDialNATSConn, RegisterNATSConn, etc.) until
+// Group F refactors them onto LookupRuntime — that is intentional and
+// preserves backward compatibility during the staged migration.
+func (m *clusterModule) Start(ctx context.Context) error {
+	provider := m.config.GetProvider()
+	var rt providers.RuntimeBroker
+	switch provider {
+	case "nats":
+		// Backwards-compat: when Dsn is empty fall back to the URI that
+		// Init resolved from env vars.
+		if m.config.GetDsn() == "" {
+			if uri, ok := GetBusURI(m.instanceName); ok && uri != "" {
+				m.config.Dsn = uri
+			}
+		}
+		// Legacy degraded mode: when no DSN/URI is available at Start time
+		// (the IaC-only / plan-apply flow + tests that exercise the missing-
+		// URI error path) skip Connect and leave runtime/conn nil. Legacy
+		// steps/trigger paths continue using GetOrDialNATSConn which surfaces
+		// the missing-URI error at execution time with the same message.
+		// LookupRuntime will return "not yet started" so any Group F caller
+		// migrated to the runtime sees a clear error rather than a nil deref.
+		if m.config.GetDsn() == "" {
+			RegisterBrokerInstance(m.instanceName, m)
+			return nil
+		}
+		rt = natsruntime.NewRuntime()
+	case "pgchannel":
+		rt = pgchannelruntime.NewRuntime()
+	default:
+		return fmt.Errorf("eventbus.broker %q: unsupported provider %q for Start (must be nats|pgchannel)", m.instanceName, provider)
+	}
+	conn, err := rt.Connect(ctx, m.config)
+	if err != nil {
+		return fmt.Errorf("eventbus.broker %q: connect: %w", m.instanceName, err)
+	}
+	m.runtime = rt
+	m.conn = conn
+	RegisterBrokerInstance(m.instanceName, m)
+	return nil
+}
 
-// Stop closes the cached NATS connection (if any) and unregisters the cluster
-// config and URI from global registries.
+// Stop tears down resources in the reverse order Start established them:
+//  1. unregister the broker instance so new LookupRuntime calls fail fast;
+//  2. close the runtime Connection (best-effort — errors are non-fatal but
+//     logged via the returned error chain when nothing else fails);
+//  3. close + evict any legacy nats.Conn cached for the instance (preserves
+//     Group A/B compatibility for steps/triggers that have not yet migrated);
+//  4. drop the legacy bus URI + cluster config from the global registries.
+//
+// Stop is safe to call when Start never ran (runtime/conn nil) — the runtime
+// teardown is gated on conn != nil so the lifecycle remains symmetric.
 func (m *clusterModule) Stop(_ context.Context) error {
-	closeNATSConn(m.instanceName) // drain + close cached *nats.Conn, idempotent
+	UnregisterBrokerInstance(m.instanceName)
+	var closeErr error
+	if m.conn != nil {
+		closeErr = m.conn.Close()
+		m.conn = nil
+	}
+	m.runtime = nil
+	closeNATSConn(m.instanceName) // drain + close legacy cached *nats.Conn, idempotent
 	UnregisterBusURI(m.instanceName)
 	UnregisterCluster(m.instanceName)
+	if closeErr != nil {
+		return fmt.Errorf("eventbus.broker %q: close runtime connection: %w", m.instanceName, closeErr)
+	}
 	return nil
 }

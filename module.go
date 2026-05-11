@@ -142,6 +142,39 @@ func LookupRuntime(name string) (providers.RuntimeBroker, providers.Connection, 
 	return rt, conn, nil
 }
 
+// LookupRuntimeWithFallback resolves a RuntimeBroker + Connection given an
+// optional brokerRef. When brokerRef is non-empty, behaves like LookupRuntime.
+// When brokerRef is empty AND exactly one broker is registered, returns that
+// broker (the legacy single-bus fallback that mirrors DefaultBusConn).
+//
+// Used by step factories + the trigger so configs predating the broker_ref
+// field continue to work in single-bus deployments. Returns a clear error
+// when the fallback is ambiguous (multiple brokers registered) or impossible
+// (no brokers registered), guiding the caller to set broker_ref explicitly.
+func LookupRuntimeWithFallback(brokerRef string) (providers.RuntimeBroker, providers.Connection, error) {
+	if brokerRef != "" {
+		return LookupRuntime(brokerRef)
+	}
+	// Collect all registered broker names so we can pick the single legacy
+	// match or surface a descriptive ambiguity / not-registered error.
+	var names []string
+	brokerInstanceRegistry.Range(func(k, _ any) bool {
+		if name, ok := k.(string); ok {
+			names = append(names, name)
+		}
+		return true
+	})
+	switch len(names) {
+	case 0:
+		return nil, nil, fmt.Errorf("eventbus: no broker_ref provided and no broker module registered; add an eventbus.broker module or set broker_ref on the request")
+	case 1:
+		return LookupRuntime(names[0])
+	default:
+		sort.Strings(names)
+		return nil, nil, fmt.Errorf("eventbus: no broker_ref provided and multiple brokers are registered (%v); set broker_ref on the request to disambiguate", names)
+	}
+}
+
 // ── NATS connection cache ─────────────────────────────────────────────────────
 
 // natsConnCache holds one live *nats.Conn per bus instance name.
@@ -154,6 +187,11 @@ var (
 
 // RegisterNATSConn stores a live connection under instanceName. Exported so that
 // integration tests and the trigger can pre-populate the cache.
+//
+// Deprecated: this helper predates the providers.RuntimeBroker abstraction.
+// New code should construct an eventbus.broker module + call Init/Start, which
+// publishes the runtime + connection through LookupRuntime. Kept for legacy
+// callers and the bounded lifecycle teardown path in clusterModule.Stop.
 func RegisterNATSConn(instanceName string, conn *nats.Conn) {
 	connCacheMu.Lock()
 	defer connCacheMu.Unlock()
@@ -163,6 +201,8 @@ func RegisterNATSConn(instanceName string, conn *nats.Conn) {
 // UnregisterNATSConn removes the cached connection entry for instanceName without
 // closing the connection. Use this in tests that manage the connection's lifetime
 // separately (e.g., via nc.Close() + embedded-server shutdown).
+//
+// Deprecated: see RegisterNATSConn.
 func UnregisterNATSConn(instanceName string) {
 	connCacheMu.Lock()
 	defer connCacheMu.Unlock()
@@ -170,6 +210,8 @@ func UnregisterNATSConn(instanceName string) {
 }
 
 // GetNATSConn returns the cached *nats.Conn for instanceName, or false if absent.
+//
+// Deprecated: see RegisterNATSConn.
 func GetNATSConn(instanceName string) (*nats.Conn, bool) {
 	connCacheMu.Lock()
 	defer connCacheMu.Unlock()
@@ -184,6 +226,10 @@ func GetNATSConn(instanceName string) (*nats.Conn, bool) {
 // Lock ordering: connCacheMu and urlMu (held inside GetBusURI) are never held
 // simultaneously. The URI lookup happens between the fast-path unlock and the
 // slow-path re-lock so that no nested acquisition is possible.
+//
+// Deprecated: new code should use LookupRuntime / LookupRuntimeWithFallback,
+// which dispatch through providers.RuntimeBroker. Retained for source-compat
+// with external consumers that still hold a direct *nats.Conn.
 func GetOrDialNATSConn(instanceName string) (*nats.Conn, error) {
 	// Fast path: return cached live connection without touching urlMu.
 	connCacheMu.Lock()
@@ -250,6 +296,11 @@ var natsDialFn = func(uri string) (*nats.Conn, error) {
 // across invocations and concurrent goroutines, even when multiple buses are
 // registered. For multi-bus workflows, use GetOrDialNATSConn(instanceName)
 // directly.
+//
+// Deprecated: superseded by LookupRuntimeWithFallback, which routes through
+// providers.RuntimeBroker and works across nats / pgchannel / future
+// providers. Retained for source-compat with callers that still hold a
+// direct *nats.Conn.
 func DefaultBusConn() (*nats.Conn, error) {
 	clusterMu.RLock()
 	names := make([]string, 0, len(clusterRegistry))

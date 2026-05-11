@@ -197,7 +197,7 @@ func setupNATSStream(t *testing.T, url, streamName, subject, consumerName string
 
 // ── fetchAndFire — callback data contract ─────────────────────────────────────
 
-// TestSubscribeTrigger_FetchAndFire_CallbackData verifies that fetchAndFire
+// TestSubscribeTrigger_FetchAndFire_CallbackData verifies that the trigger
 // invokes the callback with a data map whose keys and value types match the
 // workflow.plugin.eventbus.v1.Message proto contract:
 //
@@ -208,8 +208,9 @@ func setupNATSStream(t *testing.T, url, streamName, subject, consumerName string
 //	"published_at" → string
 //	"ack_token"    → string
 //
-// This test exercises the in-process trigger wiring path (cb != nil) end-to-end
-// using an embedded NATS server so no external infrastructure is required.
+// This test exercises the in-process trigger wiring path (cb != nil)
+// end-to-end using an embedded NATS server + a real eventbus.broker module
+// dispatched through providers.RuntimeBroker.
 func TestSubscribeTrigger_FetchAndFire_CallbackData(t *testing.T) {
 	const (
 		instanceName = "trigger-fetch-test"
@@ -222,17 +223,24 @@ func TestSubscribeTrigger_FetchAndFire_CallbackData(t *testing.T) {
 	nc := setupNATSStream(t, natsURL, streamName, subject, consumerName)
 	defer nc.Close()
 
-	// Pre-register the cluster in the global registry so DefaultBusConn resolves.
-	eventbus.RegisterCluster(instanceName, &eventbusv1.ClusterConfig{
+	// Spin up a real eventbus.broker module so LookupRuntimeWithFallback
+	// resolves through the RuntimeBroker abstraction. Init + Start populate
+	// the broker-instance registry with a live nats runtime + connection.
+	bus, err := eventbus.NewClusterModule(instanceName, &eventbusv1.ClusterConfig{
 		Provider:     "nats",
 		DeployTarget: "digitalocean.app_platform",
+		Dsn:          natsURL,
 	})
-	t.Cleanup(func() { eventbus.UnregisterCluster(instanceName) })
-	eventbus.RegisterBusURI(instanceName, natsURL)
-	t.Cleanup(func() { eventbus.UnregisterBusURI(instanceName) })
-	// Pre-populate the NATS connection cache; avoids dialling in the trigger goroutine.
-	eventbus.RegisterNATSConn(instanceName, nc)
-	t.Cleanup(func() { eventbus.UnregisterNATSConn(instanceName) })
+	if err != nil {
+		t.Fatalf("create broker module: %v", err)
+	}
+	if err := bus.Init(); err != nil {
+		t.Fatalf("Init broker: %v", err)
+	}
+	if err := bus.Start(context.Background()); err != nil {
+		t.Fatalf("Start broker: %v", err)
+	}
+	t.Cleanup(func() { _ = bus.Stop(context.Background()) })
 
 	// Publish one message with a custom header.
 	js, err := nc.JetStream()
@@ -365,15 +373,21 @@ func TestSubscribeTrigger_FetchLoop_ExitsOnCancel(t *testing.T) {
 	nc := setupNATSStream(t, natsURL, streamName, subject, consumerName)
 	defer nc.Close()
 
-	eventbus.RegisterCluster(instanceName, &eventbusv1.ClusterConfig{
+	bus, err := eventbus.NewClusterModule(instanceName, &eventbusv1.ClusterConfig{
 		Provider:     "nats",
 		DeployTarget: "digitalocean.app_platform",
+		Dsn:          natsURL,
 	})
-	t.Cleanup(func() { eventbus.UnregisterCluster(instanceName) })
-	eventbus.RegisterBusURI(instanceName, natsURL)
-	t.Cleanup(func() { eventbus.UnregisterBusURI(instanceName) })
-	eventbus.RegisterNATSConn(instanceName, nc)
-	t.Cleanup(func() { eventbus.UnregisterNATSConn(instanceName) })
+	if err != nil {
+		t.Fatalf("create broker module: %v", err)
+	}
+	if err := bus.Init(); err != nil {
+		t.Fatalf("Init broker: %v", err)
+	}
+	if err := bus.Start(context.Background()); err != nil {
+		t.Fatalf("Start broker: %v", err)
+	}
+	t.Cleanup(func() { _ = bus.Stop(context.Background()) })
 
 	cb := sdk.TriggerCallback(func(string, map[string]any) error { return nil })
 	cfg := &eventbusv1.ConsumerConfig{
@@ -404,10 +418,10 @@ func TestSubscribeTrigger_FetchLoop_ExitsOnCancel(t *testing.T) {
 	}
 }
 
-// TestSubscribeTrigger_FetchLoop_RetryOnError verifies that fetchLoop keeps
-// retrying after a transient error and eventually fires the callback when
-// the stream becomes available. We simulate "not yet available" by publishing
-// after Start rather than before.
+// TestSubscribeTrigger_FetchLoop_RetryOnError verifies that the subscribe
+// loop keeps retrying after a transient error and eventually fires the
+// callback when the stream becomes available. We simulate "not yet
+// available" by publishing after Start rather than before.
 func TestSubscribeTrigger_FetchLoop_RetryOnError(t *testing.T) {
 	const (
 		instanceName = "trigger-retry-test"
@@ -420,15 +434,21 @@ func TestSubscribeTrigger_FetchLoop_RetryOnError(t *testing.T) {
 	nc := setupNATSStream(t, natsURL, streamName, subject, consumerName)
 	defer nc.Close()
 
-	eventbus.RegisterCluster(instanceName, &eventbusv1.ClusterConfig{
+	bus, err := eventbus.NewClusterModule(instanceName, &eventbusv1.ClusterConfig{
 		Provider:     "nats",
 		DeployTarget: "digitalocean.app_platform",
+		Dsn:          natsURL,
 	})
-	t.Cleanup(func() { eventbus.UnregisterCluster(instanceName) })
-	eventbus.RegisterBusURI(instanceName, natsURL)
-	t.Cleanup(func() { eventbus.UnregisterBusURI(instanceName) })
-	eventbus.RegisterNATSConn(instanceName, nc)
-	t.Cleanup(func() { eventbus.UnregisterNATSConn(instanceName) })
+	if err != nil {
+		t.Fatalf("create broker module: %v", err)
+	}
+	if err := bus.Init(); err != nil {
+		t.Fatalf("Init broker: %v", err)
+	}
+	if err := bus.Start(context.Background()); err != nil {
+		t.Fatalf("Start broker: %v", err)
+	}
+	t.Cleanup(func() { _ = bus.Stop(context.Background()) })
 
 	var (
 		mu       sync.Mutex

@@ -312,19 +312,44 @@ var _ sdk.ModuleInstance = (*clusterModule)(nil)
 
 // NewClusterModule creates a clusterModule from a typed ClusterConfig proto.
 //
-// Returns an error if:
-//   - config.provider is empty or unknown
-//   - config.deploy_target is empty or unsupported for the given provider
+// Validation is per-provider because the configuration shape diverges:
+//
+//   - pgchannel runs in-process against an existing Postgres database. It
+//     does not deploy a broker, so deploy_target is meaningless; instead
+//     broker_target=in_process is required (the only supported mode in
+//     the in-process runtime) along with cfg.dsn carrying the Postgres
+//     connection string.
+//   - nats, kafka, kinesis each deploy a managed/self-hosted broker onto
+//     a cloud target, so deploy_target is required and must be in the
+//     supported matrix (providers.ValidateProviderTarget).
+//
+// Any provider not in the {pgchannel, nats, kafka, kinesis} set is
+// rejected here. The previous implementation rejected any empty
+// deploy_target uniformly; the relaxation lands as part of design §1.7
+// to enable the pg-backed-provider flow.
 func NewClusterModule(instanceName string, cfg *eventbusv1.ClusterConfig) (sdk.ModuleInstance, error) {
-	if cfg.GetProvider() == "" {
-		return nil, fmt.Errorf("infra.eventbus %q: config.provider is required", instanceName)
+	provider := cfg.GetProvider()
+	if provider == "" {
+		return nil, fmt.Errorf("eventbus.broker %q: config.provider is required", instanceName)
 	}
-	if cfg.GetDeployTarget() == "" {
-		return nil, fmt.Errorf("infra.eventbus %q: config.deploy_target is required", instanceName)
-	}
-	target := providers.DeployTarget(cfg.GetDeployTarget())
-	if err := providers.ValidateProviderTarget(cfg.GetProvider(), target); err != nil {
-		return nil, fmt.Errorf("infra.eventbus %q: %w", instanceName, err)
+	switch provider {
+	case "pgchannel":
+		if cfg.GetBrokerTarget() != "in_process" {
+			return nil, fmt.Errorf("eventbus.broker %q: pgchannel requires broker_target=in_process (got %q)", instanceName, cfg.GetBrokerTarget())
+		}
+		if cfg.GetDsn() == "" {
+			return nil, fmt.Errorf("eventbus.broker %q: pgchannel requires dsn (Postgres connection string)", instanceName)
+		}
+	case "nats", "kafka", "kinesis":
+		if cfg.GetDeployTarget() == "" {
+			return nil, fmt.Errorf("eventbus.broker %q: %s requires deploy_target", instanceName, provider)
+		}
+		target := providers.DeployTarget(cfg.GetDeployTarget())
+		if err := providers.ValidateProviderTarget(provider, target); err != nil {
+			return nil, fmt.Errorf("eventbus.broker %q: %w", instanceName, err)
+		}
+	default:
+		return nil, fmt.Errorf("eventbus.broker %q: unsupported provider %q (supported: pgchannel, nats, kafka, kinesis)", instanceName, provider)
 	}
 	return &clusterModule{instanceName: instanceName, config: cfg}, nil
 }

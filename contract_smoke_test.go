@@ -5,6 +5,7 @@ import (
 
 	eventbus "github.com/GoCodeAlone/workflow-plugin-eventbus"
 	eventbusv1 "github.com/GoCodeAlone/workflow-plugin-eventbus/gen"
+	"google.golang.org/protobuf/types/known/anypb"
 )
 
 // TestEventbusPlugin_SubscribeTriggerFactoryNonNil verifies that the
@@ -30,17 +31,22 @@ func TestEventbusPlugin_SubscribeTriggerFactoryNonNil(t *testing.T) {
 		t.Fatalf("trigger.eventbus.subscribe not in TypedModuleTypes: %v", types)
 	}
 
-	// Verify that NewSubscribeTrigger returns non-nil for valid config.
+	// Exercise the BMW PR 277 failure surface via CreateTypedModule (the typed
+	// factory path), not the lower-level NewSubscribeTrigger constructor.
 	cfg := &eventbusv1.ConsumerConfig{
 		Name:       "test-consumer",
 		StreamName: "TEST_STREAM",
 	}
-	mod, err := eventbus.NewSubscribeTrigger("test-instance", cfg, nil)
+	packed, err := anypb.New(cfg)
 	if err != nil {
-		t.Fatalf("NewSubscribeTrigger returned unexpected error: %v", err)
+		t.Fatalf("anypb.New: %v", err)
+	}
+	mod, err := f.CreateTypedModule("trigger.eventbus.subscribe", "test-instance", packed)
+	if err != nil {
+		t.Fatalf("CreateTypedModule returned unexpected error: %v", err)
 	}
 	if mod == nil {
-		t.Fatal("NewSubscribeTrigger returned nil ModuleInstance")
+		t.Fatal("CreateTypedModule returned nil ModuleInstance")
 	}
 }
 
@@ -64,6 +70,23 @@ func TestEventbusPlugin_AllFactoriesNonNil(t *testing.T) {
 		if !found {
 			t.Fatalf("eventbus.broker not in TypedModuleTypes: %v", types)
 		}
+		// Instantiate with a minimal valid ClusterConfig to confirm non-nil return.
+		cfg := &eventbusv1.ClusterConfig{
+			Provider:     "pgchannel",
+			BrokerTarget: "in_process",
+			Dsn:          "postgres://u:p@localhost/db?sslmode=disable",
+		}
+		packed, err := anypb.New(cfg)
+		if err != nil {
+			t.Fatalf("anypb.New: %v", err)
+		}
+		mod, err := f.CreateTypedModule("eventbus.broker", "test-broker", packed)
+		if err != nil {
+			t.Fatalf("ClusterModuleFactory.CreateTypedModule: %v", err)
+		}
+		if mod == nil {
+			t.Fatal("ClusterModuleFactory.CreateTypedModule returned nil ModuleInstance")
+		}
 	})
 
 	t.Run("StreamModuleFactory", func(t *testing.T) {
@@ -82,6 +105,22 @@ func TestEventbusPlugin_AllFactoriesNonNil(t *testing.T) {
 		if !found {
 			t.Fatalf("eventbus.stream not in TypedModuleTypes: %v", types)
 		}
+		// Instantiate with a minimal valid StreamConfig to confirm non-nil return.
+		cfg := &eventbusv1.StreamConfig{
+			Name:     "test-stream",
+			Subjects: []string{"TEST.>"},
+		}
+		packed, err := anypb.New(cfg)
+		if err != nil {
+			t.Fatalf("anypb.New: %v", err)
+		}
+		mod, err := f.CreateTypedModule("eventbus.stream", "test-stream", packed)
+		if err != nil {
+			t.Fatalf("StreamModuleFactory.CreateTypedModule: %v", err)
+		}
+		if mod == nil {
+			t.Fatal("StreamModuleFactory.CreateTypedModule returned nil ModuleInstance")
+		}
 	})
 
 	t.Run("ConsumerModuleFactory", func(t *testing.T) {
@@ -99,6 +138,22 @@ func TestEventbusPlugin_AllFactoriesNonNil(t *testing.T) {
 		}
 		if !found {
 			t.Fatalf("eventbus.consumer not in TypedModuleTypes: %v", types)
+		}
+		// Instantiate with a minimal valid ConsumerConfig to confirm non-nil return.
+		cfg := &eventbusv1.ConsumerConfig{
+			Name:       "test-consumer",
+			StreamName: "TEST_STREAM",
+		}
+		packed, err := anypb.New(cfg)
+		if err != nil {
+			t.Fatalf("anypb.New: %v", err)
+		}
+		mod, err := f.CreateTypedModule("eventbus.consumer", "test-consumer", packed)
+		if err != nil {
+			t.Fatalf("ConsumerModuleFactory.CreateTypedModule: %v", err)
+		}
+		if mod == nil {
+			t.Fatal("ConsumerModuleFactory.CreateTypedModule returned nil ModuleInstance")
 		}
 	})
 }

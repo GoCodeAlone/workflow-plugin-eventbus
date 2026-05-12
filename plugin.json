@@ -7,7 +7,7 @@
     "type": "external",
     "tier": "community",
     "private": false,
-    "minEngineVersion": "0.20.0",
+    "minEngineVersion": "0.51.2",
     "keywords": ["eventbus", "nats", "kafka", "kinesis", "iac", "infra", "jetstream"],
     "homepage": "https://github.com/GoCodeAlone/workflow-plugin-eventbus",
     "repository": "https://github.com/GoCodeAlone/workflow-plugin-eventbus",

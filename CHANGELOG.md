@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.3.2 — 2026-05-13
+
+### Fixed
+
+- Packages PR #9 (Copilot review follow-up to the v0.3.1 trigger-alias PR) into a release binary. v0.3.1 was tagged before #9 merged, so the v0.3.1 release artifact ships without the CI workflow + observable-assertion test refactors. v0.3.2 is the first release binary that includes them. No runtime behaviour change vs. v0.3.1; the `trigger.eventbus.subscribe` handler's stream_name + broker_ref inheritance from the matching `eventbus.consumer` module (the BMW pattern) is exactly the same code path.
+
+### Added
+
+- `TestCreateTrigger_InheritsStreamNameFromConsumerModuleInit` exercises the realistic engine flow: a `consumer` module is instantiated via `NewConsumerModule` and registered via its own `Init()` lifecycle hook (not via a direct `RegisterConsumer` call), then the plugin's `CreateTrigger` is invoked with BMW-shape config (`bus + consumer + filter_subject`, no `stream_name`). Guards against regressions in the module-lifecycle → registry → trigger inheritance chain that all 6 declared BMW consumers depend on.
+- `TestCreateTrigger_StreamNameInheritanceFailsClearlyWhenConsumerUnregistered` documents the BMW `bmw-financial-health` runtime-ephemeral-consumer edge case: when the trigger names a `consumer` for which no matching `eventbus.consumer` module is declared, the build must fail with a `stream_name` error so the operator knows to either declare the consumer module or supply `stream_name` explicitly in the trigger config.
+
+### Module ordering invariant
+
+- Workflow v0.51.x's `StdEngine.BuildFromConfig` calls `app.Init()` (which fires every module's `Init`, including `consumerModule.Init` → `RegisterConsumer`) *before* `configurePipelines`, which is where `RemoteTrigger.Configure` dispatches `CreateTrigger` into the plugin's gRPC server. This is the ordering the inheritance code in `cmd/workflow-plugin-eventbus/plugin.go` depends on; the engine guarantees it for v0.51.5+.
+
 ## v0.3.1 — 2026-05-13
 
 ### Fixed

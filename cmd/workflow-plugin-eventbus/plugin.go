@@ -125,7 +125,18 @@ func (p *eventbusPlugin) CreateTrigger(typeName string, config map[string]any, c
 	// Perform explicit type assertions so callers get a clear error when a field
 	// is present but has the wrong type (e.g. config["name"] = 42 gives
 	// "config[name] must be a string, got int" rather than "config.name is required").
-	name, err := configString(config, "name")
+	//
+	// Alias support: BMW and other downstream consumers express trigger configs in
+	// terms of the durable consumer row's user-facing identifiers — `consumer` (the
+	// consumer name) and `bus` (the broker module name) — rather than the proto
+	// canonical fields `name` / `broker_ref`. Accept both forms; canonical fields
+	// win when both are supplied. See PR fixing "config.name is required" for the
+	// BMW eventbus pipelines (workflow-plugin-eventbus v0.3.1).
+	name, err := configStringAlias(config, "name", "consumer")
+	if err != nil {
+		return nil, fmt.Errorf("workflow-plugin-eventbus: CreateTrigger %q: %w", typeName, err)
+	}
+	brokerRef, err := configStringAlias(config, "broker_ref", "bus")
 	if err != nil {
 		return nil, fmt.Errorf("workflow-plugin-eventbus: CreateTrigger %q: %w", typeName, err)
 	}
@@ -133,11 +144,27 @@ func (p *eventbusPlugin) CreateTrigger(typeName string, config map[string]any, c
 	if err != nil {
 		return nil, fmt.Errorf("workflow-plugin-eventbus: CreateTrigger %q: %w", typeName, err)
 	}
+	// stream_name fallback: when only the consumer name is supplied (BMW pattern —
+	// the consumer's stream binding is declared by the matching infra.eventbus.consumer
+	// module), inherit stream_name from the registered consumer. Returns "" if no
+	// consumer with this name is registered yet; NewSubscribeTrigger will then
+	// surface the missing-stream_name error with a helpful pointer.
+	if streamName == "" && name != "" {
+		if reg, ok := eventbus.GetConsumerByName(name); ok {
+			streamName = reg.GetStreamName()
+			// Inherit broker_ref too when the caller did not pin one explicitly,
+			// so the trigger uses the same broker the consumer module bound to.
+			if brokerRef == "" {
+				brokerRef = reg.GetBrokerRef()
+			}
+		}
+	}
 	filterSubject, _ := configString(config, "filter_subject") //nolint:errcheck // optional field
 	cfg := &eventbusv1.ConsumerConfig{
 		Name:          name,
 		StreamName:    streamName,
 		FilterSubject: filterSubject,
+		BrokerRef:     brokerRef,
 	}
 	inst, err := eventbus.NewSubscribeTrigger(typeName, cfg, cb)
 	if err != nil {
@@ -158,6 +185,23 @@ func configString(config map[string]any, key string) (string, error) {
 		return "", fmt.Errorf("config[%s] must be a string, got %T", key, v)
 	}
 	return s, nil
+}
+
+// configStringAlias extracts key from config as a string, falling back to the
+// supplied alias key when key is absent or empty. The canonical key wins when
+// both are present and non-empty. Returns an error if either key is present
+// but not a string type. Used to accept user-friendly trigger config keys
+// (`consumer`, `bus`) as aliases for the proto-canonical fields
+// (`name`, `broker_ref`).
+func configStringAlias(config map[string]any, key, alias string) (string, error) {
+	v, err := configString(config, key)
+	if err != nil {
+		return "", err
+	}
+	if v != "" {
+		return v, nil
+	}
+	return configString(config, alias)
 }
 
 // ── ContractProvider ──────────────────────────────────────────────────────────

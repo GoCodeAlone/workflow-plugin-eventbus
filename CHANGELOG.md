@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.3.3 — 2026-05-13
+
+### Fixed
+
+- **`ContractRegistry()` now populates `FileDescriptorSet`** so the workflow engine can resolve `workflow.plugin.eventbus.v1.*` proto codecs at module / step / trigger construction time. Without this, the engine fell back to `protoregistry.GlobalTypes`, which does not contain plugin-local proto types, and STRICT_PROTO `eventbus.consumer` (and any other typed eventbus capability) failed with `generated codec for protobuf message "workflow.plugin.eventbus.v1.ConsumerConfig" not found: proto: not found` at module init. Regression caught by BMW PR #279 image-launch against workflow v0.51.5; sister plugin workflow-plugin-audit-chain v0.2.3 already shipped the equivalent fix in its `ContractRegistry`.
+- Included file descriptors: `google.protobuf.Struct` (for any pass-through dynamic config), `google.protobuf.Empty` (for capabilities without typed config), and the generated `workflow.plugin.eventbus.v1` file (every plugin Config / Input / Output / Message type).
+
 ## v0.3.2 — 2026-05-13
 
 ### Fixed

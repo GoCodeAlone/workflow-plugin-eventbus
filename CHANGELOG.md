@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.3.4 — 2026-05-13
+
+### Fixed
+
+- **Include `google/protobuf/duration.proto` in `ContractRegistry.FileDescriptorSet`.** `eventbus.proto` imports `duration.proto` for `StreamConfig.max_age` and `ConsumerConfig.ack_wait`. `protodesc.NewFiles` requires every imported file to be present in the FileDescriptorSet, so the v0.3.3 set (struct + empty + eventbus) silently failed to register any eventbus messages — the engine's contract-types resolver ended up empty, and STRICT_PROTO modules fell through to `protoregistry.GlobalTypes` (which still doesn't contain plugin-local protos). Result: PR 279 image-launch *still* hit `generated codec ... not found` after the v0.3.3 bump. v0.3.4 adds the duration well-known type before the eventbus file in the descriptor set so resolution completes.
+
 ## v0.3.3 — 2026-05-13
 
 ### Fixed

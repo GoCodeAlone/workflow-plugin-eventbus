@@ -7,6 +7,7 @@ import (
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/structpb"
 
@@ -228,6 +229,11 @@ func (p *eventbusPlugin) ContractRegistry() *pb.ContractRegistry {
 			File: []*descriptorpb.FileDescriptorProto{
 				protodesc.ToFileDescriptorProto(structpb.File_google_protobuf_struct_proto),
 				protodesc.ToFileDescriptorProto(emptypb.File_google_protobuf_empty_proto),
+				// eventbus.proto imports google/protobuf/duration.proto for
+				// StreamConfig.max_age + ConsumerConfig.ack_wait — protodesc.NewFiles
+				// requires every imported file to be present in the FileDescriptorSet,
+				// so include the duration well-known type BEFORE eventbus_proto.
+				protodesc.ToFileDescriptorProto(durationpb.File_google_protobuf_duration_proto),
 				protodesc.ToFileDescriptorProto(eventbusv1.File_eventbus_proto),
 			},
 		},

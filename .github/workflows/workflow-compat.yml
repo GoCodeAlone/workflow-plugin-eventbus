@@ -1,0 +1,62 @@
+name: workflow-compat
+# Compatibility gate against the latest wfctl release. Builds the plugin and
+# runs `wfctl validate --plugin-dir <build-dir>` against a minimal config that
+# exercises the v0.3.1 fix path: `trigger.eventbus.subscribe` supplying the
+# BMW-style `consumer` / `bus` aliases without the proto-canonical `name` /
+# `broker_ref`. Fails the PR if a future change breaks this compatibility.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Allow ad-hoc dispatch so we can re-run against a newer wfctl release
+  # without needing a code change.
+  workflow_dispatch:
+    inputs:
+      wfctl_version:
+        description: 'wfctl version to validate against (e.g. v0.51.5, or "latest")'
+        required: false
+        default: latest
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # Build the plugin binary so `wfctl validate --plugin-dir` finds the
+      # manifest + executable. The plugin-dir layout expected by
+      # schema.LoadPluginTypesFromDir is `<dir>/<plugin-name>/plugin.json`.
+      - name: Build plugin
+        run: |
+          set -eux
+          mkdir -p build/eventbus
+          go build -o build/eventbus/workflow-plugin-eventbus ./cmd/workflow-plugin-eventbus
+          cp plugin.json plugin.contracts.json build/eventbus/
+
+      - uses: GoCodeAlone/setup-wfctl@bcd880980f5bbe8d192d0c20ff6279d25331f956
+        with:
+          version: ${{ github.event.inputs.wfctl_version || 'latest' }}
+
+      - name: wfctl version
+        run: wfctl --version || wfctl version || true
+
+      # Core compatibility assertion: a config that supplies `consumer` /
+      # `bus` (BMW pattern) instead of `name` / `broker_ref` must validate.
+      # Pre-v0.3.1 this surfaced as `config.name is required` at engine build
+      # time; the static `wfctl validate --plugin-dir` path checks that the
+      # trigger type is recognized and the schema does not reject the alias
+      # keys at the YAML level. The deeper handler-level assertion lives in
+      # cmd/workflow-plugin-eventbus/plugin_test.go.
+      - name: Validate trigger-no-name compat config
+        run: |
+          set -eux
+          wfctl validate --plugin-dir ./build --skip-unknown-types testdata/compat-trigger-no-name.yaml

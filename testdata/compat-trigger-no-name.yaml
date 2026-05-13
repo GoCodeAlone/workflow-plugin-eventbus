@@ -1,0 +1,50 @@
+# Minimal config exercising the v0.3.1 fix: `trigger.eventbus.subscribe` with
+# BMW-style `consumer` + `bus` aliases instead of the proto-canonical
+# `name` + `broker_ref`. wfctl validate must accept this against the plugin
+# loaded via --plugin-dir (the type is registered and the schema does not
+# reject unknown YAML keys at the trigger-config level).
+
+name: eventbus-trigger-name-optional-compat
+
+modules:
+  - name: bmw-eventbus
+    type: eventbus.broker
+    config:
+      provider: nats
+      deploy_target: digitalocean.app_platform
+      broker_target: digitalocean.app_platform
+      dsn: nats://localhost:4222
+
+  - name: bmw-stream
+    type: eventbus.stream
+    config:
+      name: BMW_FULFILLMENT
+      broker_ref: bmw-eventbus
+      subjects:
+        - bmw.>
+
+  - name: bmw-consumer-settlement-runner
+    type: eventbus.consumer
+    config:
+      name: bmw-settlement-runner
+      stream_name: BMW_FULFILLMENT
+      broker_ref: bmw-eventbus
+      filter_subject: bmw.fulfillment.delivered
+
+workflows:
+  pipelines:
+    pipelines:
+      bmw-settlement-runner:
+        # NOTE: trigger config omits `name`; supplies `consumer` (alias) and
+        # `bus` (alias for broker_ref). Pre-v0.3.1 this failed engine build
+        # with `config.name is required`.
+        trigger:
+          type: trigger.eventbus.subscribe
+          config:
+            bus: bmw-eventbus
+            consumer: bmw-settlement-runner
+            filter_subject: bmw.fulfillment.delivered
+        steps:
+          - name: noop
+            type: step.noop
+            config: {}

@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.3.1 — 2026-05-13
+
+### Fixed
+
+- `trigger.eventbus.subscribe` no longer fails engine build with `config.name is required` when the pipeline supplies the BMW-style `consumer` and `bus` keys instead of the proto-canonical `name` and `broker_ref`. The plugin's `CreateTrigger` legacy-map handler now treats `consumer` as an alias for `name` and `bus` as an alias for `broker_ref`; canonical keys win when both are supplied. When only the consumer name is supplied, `stream_name` (and `broker_ref` if unset) are inherited from the matching `infra.eventbus.consumer` module's registered `ConsumerConfig` via `eventbus.GetConsumerByName`. Unblocks 7 BMW pipelines (`bmw-status-poller`, `bmw-contributor-notifier`, `bmw-settlement-runner`, `bmw-audit-appender`, `bmw-recipient-notifier`, `bmw-financial-health`, `bmw-fulfillment-dispatcher`) against workflow v0.51.5. Proto schema unchanged.
+- `plugin.json` version bumped from the stale `0.1.0` to `0.3.1`; download URLs updated to match. Previous `v0.2.0` / `v0.3.0` releases shipped with the v0.1.0 manifest version inadvertently.
+
+### Added
+
+- CI workflow `.github/workflows/workflow-compat.yml` that builds the plugin and runs `wfctl validate` against a minimal `trigger.eventbus.subscribe` config that omits `name` (uses `consumer` alias), guarding against regressions of the BMW compatibility path.
+
 ## v0.2.0 — 2026-05-11
 
 ### BREAKING

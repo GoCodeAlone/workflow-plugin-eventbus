@@ -64,21 +64,72 @@ func TestCreateTrigger_AliasBusToBrokerRef(t *testing.T) {
 // canonical key and its alias are supplied, the canonical value wins. Prevents
 // silent misconfiguration when users migrate from BMW-style aliases to
 // proto-canonical fields.
+//
+// Observable assertion strategy: register a consumer ONLY under the canonical
+// name with a known stream_name. Omit `stream_name` from the trigger config so
+// the handler must derive it via GetConsumerByName(<resolved name>). If the
+// canonical name wins the lookup succeeds and CreateTrigger returns nil; if
+// the alias incorrectly wins, the lookup for the alias name misses and
+// NewSubscribeTrigger surfaces `config.stream_name is required`.
 func TestCreateTrigger_CanonicalFieldsWinOverAlias(t *testing.T) {
+	const (
+		canonicalName   = "canonical-wins-name"
+		aliasName       = "canonical-wins-alias-name"
+		canonicalStream = "CANONICAL_WINS_STREAM"
+	)
+	eventbus.RegisterConsumer("test-canonical-wins", &eventbusv1.ConsumerConfig{
+		Name:       canonicalName,
+		StreamName: canonicalStream,
+	})
+	t.Cleanup(func() { eventbus.UnregisterConsumer("test-canonical-wins") })
+
 	p := &eventbusPlugin{}
 	cfg := map[string]any{
-		"name":        "canonical-name",
-		"consumer":    "alias-name", // ignored — canonical wins
-		"broker_ref":  "canonical-broker",
-		"bus":         "alias-broker", // ignored — canonical wins
-		"stream_name": "CANONICAL_STREAM",
+		"name":     canonicalName,
+		"consumer": aliasName, // must be ignored — canonical wins
+		// stream_name intentionally omitted: derivation must use the canonical
+		// name (registered) not the alias (unregistered).
 	}
 	inst, err := p.CreateTrigger("trigger.eventbus.subscribe", cfg, nil)
 	if err != nil {
-		t.Fatalf("CreateTrigger with both canonical + alias: %v", err)
+		t.Fatalf("CreateTrigger with both canonical + alias (canonical must win): %v", err)
 	}
 	if inst == nil {
 		t.Fatal("CreateTrigger returned nil instance")
+	}
+}
+
+// TestCreateTrigger_AliasIgnoredWhenCanonicalSet is the negative control for
+// TestCreateTrigger_CanonicalFieldsWinOverAlias: confirms that registering
+// the consumer ONLY under the alias name (and not under the canonical name)
+// causes the lookup to fail, proving the canonical-wins test above is actually
+// observing the precedence rule rather than a false-positive.
+func TestCreateTrigger_AliasIgnoredWhenCanonicalSet(t *testing.T) {
+	const (
+		canonicalName = "alias-ignored-canonical"
+		aliasName     = "alias-ignored-alias"
+		aliasStream   = "ALIAS_STREAM"
+	)
+	// Register under alias name only; canonical name is unknown.
+	eventbus.RegisterConsumer("test-alias-ignored", &eventbusv1.ConsumerConfig{
+		Name:       aliasName,
+		StreamName: aliasStream,
+	})
+	t.Cleanup(func() { eventbus.UnregisterConsumer("test-alias-ignored") })
+
+	p := &eventbusPlugin{}
+	cfg := map[string]any{
+		"name":     canonicalName,
+		"consumer": aliasName,
+		// stream_name omitted; derivation runs against the canonical (unregistered)
+		// name and must fail.
+	}
+	_, err := p.CreateTrigger("trigger.eventbus.subscribe", cfg, nil)
+	if err == nil {
+		t.Fatal("expected error: stream_name should not have been derived from the alias registry entry")
+	}
+	if !strings.Contains(err.Error(), "stream_name") {
+		t.Errorf("error should mention missing stream_name: %v", err)
 	}
 }
 

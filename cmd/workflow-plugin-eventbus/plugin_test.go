@@ -169,3 +169,95 @@ func TestCreateTrigger_TypeMismatchOnAlias(t *testing.T) {
 		t.Errorf("error should mention the offending key 'consumer': %v", err)
 	}
 }
+
+// TestCreateTrigger_InheritsStreamNameFromConsumerModuleInit reproduces the
+// realistic engine flow that BMW's local smoke exercises: the matching
+// `eventbus.consumer` module is created via NewConsumerModule and registered
+// via its own Init() — *not* via a direct call to RegisterConsumer — before
+// the plugin's CreateTrigger fires for the inline pipeline trigger.
+//
+// This guards against a regression where stream_name inheritance only worked
+// for hand-seeded registry entries but broke against the actual ModuleInstance
+// lifecycle (Init → RegisterConsumer chain). All 6 declared BMW consumers
+// (bmw-settlement-runner, bmw-audit-appender, bmw-fulfillment-dispatcher,
+// bmw-recipient-notifier, bmw-contributor-notifier, bmw-status-poller) flow
+// through this exact path.
+//
+// Engine ordering invariant relied on: workflow v0.51.5's StdEngine.BuildFromConfig
+// runs `app.Init()` (which calls every module's Init, including consumerModule's
+// RegisterConsumer call) BEFORE `configurePipelines`, which is where
+// RemoteTrigger.Configure dispatches the CreateTrigger gRPC into the plugin.
+// If that ordering ever flips, this test would still pass (we sequence Init
+// before CreateTrigger by hand) but the production path would regress; the
+// engine-side ordering is asserted upstream in workflow's engine tests.
+func TestCreateTrigger_InheritsStreamNameFromConsumerModuleInit(t *testing.T) {
+	const (
+		moduleInstance = "bmw-consumer-settlement-runner"
+		consumerName   = "bmw-settlement-runner"
+		streamName     = "BMW_FULFILLMENT"
+		brokerRef      = "bmw-eventbus"
+	)
+	mod, err := eventbus.NewConsumerModule(moduleInstance, &eventbusv1.ConsumerConfig{
+		Name:       consumerName,
+		StreamName: streamName,
+		BrokerRef:  brokerRef,
+	})
+	if err != nil {
+		t.Fatalf("NewConsumerModule: %v", err)
+	}
+	if err := mod.Init(); err != nil {
+		t.Fatalf("consumerModule.Init: %v", err)
+	}
+	t.Cleanup(func() { eventbus.UnregisterConsumer(moduleInstance) })
+
+	// Sanity: the consumer registry must observe the durable name via
+	// GetConsumerByName — this is the lookup CreateTrigger relies on.
+	got, ok := eventbus.GetConsumerByName(consumerName)
+	if !ok {
+		t.Fatalf("GetConsumerByName(%q) returned !ok after consumerModule.Init", consumerName)
+	}
+	if got.GetStreamName() != streamName {
+		t.Fatalf("registered consumer stream_name = %q, want %q", got.GetStreamName(), streamName)
+	}
+
+	// BMW-shape trigger config: `bus` + `consumer` + `filter_subject` only.
+	// No `name`, no `broker_ref`, no `stream_name`.
+	p := &eventbusPlugin{}
+	cfg := map[string]any{
+		"bus":            brokerRef,
+		"consumer":       consumerName,
+		"filter_subject": "bmw.fulfillment.delivered,bmw.fulfillment.cancelled",
+	}
+	inst, err := p.CreateTrigger("trigger.eventbus.subscribe", cfg, nil)
+	if err != nil {
+		t.Fatalf("CreateTrigger with BMW-shape config (consumer registered via module Init): %v", err)
+	}
+	if inst == nil {
+		t.Fatal("CreateTrigger returned nil instance")
+	}
+}
+
+// TestCreateTrigger_StreamNameInheritanceFailsClearlyWhenConsumerUnregistered
+// asserts the BMW edge-case: a pipeline trigger that names a `consumer` for
+// which no matching `eventbus.consumer` module is declared (the bmw-financial-
+// health "runtime-ephemeral" pattern in BMW's app.yaml). With no registry
+// entry, stream_name derivation cannot succeed and the trigger build must fail
+// with a message that mentions stream_name — so operators see a clear "declare
+// a consumer module or supply stream_name explicitly" signal rather than
+// hitting a silent runtime no-op.
+func TestCreateTrigger_StreamNameInheritanceFailsClearlyWhenConsumerUnregistered(t *testing.T) {
+	p := &eventbusPlugin{}
+	cfg := map[string]any{
+		"bus":            "bmw-eventbus",
+		"consumer":       "bmw-financial-health-not-registered",
+		"filter_subject": "bmw.>",
+		// stream_name omitted AND no consumer module registered under this name.
+	}
+	_, err := p.CreateTrigger("trigger.eventbus.subscribe", cfg, nil)
+	if err == nil {
+		t.Fatal("expected error when consumer is unregistered and stream_name omitted")
+	}
+	if !strings.Contains(err.Error(), "stream_name") {
+		t.Errorf("error should mention missing stream_name: %v", err)
+	}
+}

@@ -4,7 +4,11 @@ import (
 	"errors"
 	"fmt"
 
+	"google.golang.org/protobuf/reflect/protodesc"
+	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	eventbus "github.com/GoCodeAlone/workflow-plugin-eventbus"
 	eventbusv1 "github.com/GoCodeAlone/workflow-plugin-eventbus/gen"
@@ -209,9 +213,24 @@ func configStringAlias(config map[string]any, key, alias string) (string, error)
 // ContractRegistry returns the typed contract descriptors for all plugin
 // capabilities. These match the entries in plugin.contracts.json and are used
 // by the engine for strict-proto contract negotiation.
+//
+// The FileDescriptorSet is REQUIRED so the engine can resolve every Config/
+// Input/Output message name (e.g. workflow.plugin.eventbus.v1.ConsumerConfig)
+// into a typed codec at module/step construction time. Without it the engine
+// falls back to protoregistry.GlobalTypes which does not contain plugin-local
+// proto types, and STRICT_PROTO modules fail with
+// "generated codec for protobuf message X not found: proto: not found"
+// (regression caught by BMW PR #279 image-launch against workflow v0.51.5).
 func (p *eventbusPlugin) ContractRegistry() *pb.ContractRegistry {
 	strict := pb.ContractMode_CONTRACT_MODE_STRICT_PROTO
 	return &pb.ContractRegistry{
+		FileDescriptorSet: &descriptorpb.FileDescriptorSet{
+			File: []*descriptorpb.FileDescriptorProto{
+				protodesc.ToFileDescriptorProto(structpb.File_google_protobuf_struct_proto),
+				protodesc.ToFileDescriptorProto(emptypb.File_google_protobuf_empty_proto),
+				protodesc.ToFileDescriptorProto(eventbusv1.File_eventbus_proto),
+			},
+		},
 		Contracts: []*pb.ContractDescriptor{
 			// ── modules ───────────────────────────────────────────────────────
 			{

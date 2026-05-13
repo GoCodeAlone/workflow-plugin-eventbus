@@ -1,6 +1,6 @@
 {
     "name": "workflow-plugin-eventbus",
-    "version": "0.3.2",
+    "version": "0.3.3",
     "description": "Provisions durable event-bus clusters (NATS / Kafka / Kinesis) as IaC and exposes typed pipeline steps for publish / consume operations.",
     "author": "GoCodeAlone",
     "license": "MIT",

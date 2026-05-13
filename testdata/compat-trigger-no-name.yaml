@@ -45,6 +45,7 @@ workflows:
             consumer: bmw-settlement-runner
             filter_subject: bmw.fulfillment.delivered
         steps:
-          - name: noop
-            type: step.noop
-            config: {}
+          - name: log_event
+            type: step.log
+            config:
+              message: "received event"

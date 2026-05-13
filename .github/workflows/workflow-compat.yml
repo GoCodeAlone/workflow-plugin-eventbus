@@ -32,15 +32,16 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # Build the plugin binary so `wfctl validate --plugin-dir` finds the
-      # manifest + executable. The plugin-dir layout expected by
-      # schema.LoadPluginTypesFromDir is `<dir>/<plugin-name>/plugin.json`.
+      # Build the plugin binary so `wfctl validate --plugin-dir` can find the
+      # manifest. The plugin-dir layout expected by schema.LoadPluginTypesFromDir
+      # is `<dir>/<subdir>/plugin.json` — the subdir name is not constrained,
+      # but we use the plugin's canonical name for legibility.
       - name: Build plugin
         run: |
           set -eux
-          mkdir -p build/eventbus
-          go build -o build/eventbus/workflow-plugin-eventbus ./cmd/workflow-plugin-eventbus
-          cp plugin.json plugin.contracts.json build/eventbus/
+          mkdir -p build/workflow-plugin-eventbus
+          go build -o build/workflow-plugin-eventbus/workflow-plugin-eventbus ./cmd/workflow-plugin-eventbus
+          cp plugin.json plugin.contracts.json build/workflow-plugin-eventbus/
 
       - uses: GoCodeAlone/setup-wfctl@bcd880980f5bbe8d192d0c20ff6279d25331f956
         with:
@@ -53,10 +54,13 @@ jobs:
       # `bus` (BMW pattern) instead of `name` / `broker_ref` must validate.
       # Pre-v0.3.1 this surfaced as `config.name is required` at engine build
       # time; the static `wfctl validate --plugin-dir` path checks that the
-      # trigger type is recognized and the schema does not reject the alias
-      # keys at the YAML level. The deeper handler-level assertion lives in
-      # cmd/workflow-plugin-eventbus/plugin_test.go.
+      # plugin's module + trigger types load and the schema accepts the alias
+      # keys at the YAML level. `--skip-unknown-types` is intentionally NOT
+      # passed so an unloaded plugin (e.g. plugin-dir layout mismatch) fails
+      # the gate loudly rather than masquerading as a pass. The deeper
+      # handler-level assertion (CreateTrigger consumer→name aliasing) lives
+      # in cmd/workflow-plugin-eventbus/plugin_test.go.
       - name: Validate trigger-no-name compat config
         run: |
           set -eux
-          wfctl validate --plugin-dir ./build --skip-unknown-types testdata/compat-trigger-no-name.yaml
+          wfctl validate --plugin-dir ./build testdata/compat-trigger-no-name.yaml

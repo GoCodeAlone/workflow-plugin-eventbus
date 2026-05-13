@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/GoCodeAlone/go-plugin v1.7.0
-	github.com/GoCodeAlone/workflow v0.51.7
+	github.com/GoCodeAlone/workflow v0.51.6
 	github.com/jackc/pgx/v5 v5.9.1
 	github.com/nats-io/nats-server/v2 v2.12.4
 	github.com/nats-io/nats.go v1.51.0

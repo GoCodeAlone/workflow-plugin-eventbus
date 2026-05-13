@@ -4,9 +4,76 @@ import (
 	"strings"
 	"testing"
 
+	"google.golang.org/protobuf/reflect/protodesc"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
+	"google.golang.org/protobuf/types/dynamicpb"
+
 	eventbus "github.com/GoCodeAlone/workflow-plugin-eventbus"
 	eventbusv1 "github.com/GoCodeAlone/workflow-plugin-eventbus/gen"
 )
+
+// TestContractRegistry_FileDescriptorSetResolvesEveryContractMessage is the
+// regression test for v0.3.3's incomplete FileDescriptorSet (missing
+// google/protobuf/duration.proto which eventbus.proto imports). The engine
+// builds its contract-types resolver via protodesc.NewFiles(registry.
+// FileDescriptorSet). If any imported file is missing, NewFiles silently
+// produces a registry that never registers the eventbus messages, and the
+// engine falls through to protoregistry.GlobalTypes (which does not contain
+// plugin-local protos) at module construction time — failing with
+// "generated codec for protobuf message X not found: proto: not found".
+//
+// This test exercises the exact engine path: read the plugin's
+// ContractRegistry, register the FileDescriptorSet, then assert that every
+// Config/Input/Output/Trigger message named in Contracts can be resolved.
+func TestContractRegistry_FileDescriptorSetResolvesEveryContractMessage(t *testing.T) {
+	p := &eventbusPlugin{}
+	reg := p.ContractRegistry()
+	if reg == nil {
+		t.Fatal("ContractRegistry returned nil")
+	}
+	if reg.FileDescriptorSet == nil || len(reg.FileDescriptorSet.File) == 0 {
+		t.Fatal("ContractRegistry must populate FileDescriptorSet so the engine can resolve plugin-local proto codecs")
+	}
+	files, err := protodesc.NewFiles(reg.FileDescriptorSet)
+	if err != nil {
+		t.Fatalf("protodesc.NewFiles failed — every imported file must be present in FileDescriptorSet: %v", err)
+	}
+	types := new(protoregistry.Types)
+	files.RangeFiles(func(file protoreflect.FileDescriptor) bool {
+		registerMessages(t, types, file.Messages())
+		return true
+	})
+	// Every distinct message name referenced in Contracts (Config/Input/Output)
+	// must be resolvable. This mirrors the workflow engine's
+	// `newMessageByName(messageName, contractTypes)` lookup at
+	// createTypedConfigRequest time.
+	wantNames := map[string]struct{}{}
+	for _, c := range reg.Contracts {
+		for _, name := range []string{c.ConfigMessage, c.InputMessage, c.OutputMessage} {
+			if name == "" {
+				continue
+			}
+			wantNames[name] = struct{}{}
+		}
+	}
+	for name := range wantNames {
+		if _, err := types.FindMessageByName(protoreflect.FullName(name)); err != nil {
+			t.Errorf("FileDescriptorSet missing codec for contract message %q: %v", name, err)
+		}
+	}
+}
+
+func registerMessages(t *testing.T, types *protoregistry.Types, messages protoreflect.MessageDescriptors) {
+	t.Helper()
+	for i := 0; i < messages.Len(); i++ {
+		m := messages.Get(i)
+		if err := types.RegisterMessage(dynamicpb.NewMessageType(m)); err != nil {
+			t.Fatalf("register %q: %v", m.FullName(), err)
+		}
+		registerMessages(t, types, m.Messages())
+	}
+}
 
 // TestCreateTrigger_AliasConsumerToName verifies that BMW-style configs supplying
 // `consumer` instead of the proto-canonical `name` build successfully. This is

@@ -1,0 +1,25 @@
+# examples/minimal/config.yaml — minimal workflow-plugin-eventbus example.
+# Demonstrates publishing an event via step.eventbus.publish.
+# Uses pgchannel provider which requires only a DATABASE_URL — no external broker needed.
+
+modules:
+    - name: my-events
+      type: eventbus.broker
+      config:
+        provider: pgchannel
+        broker_target: in_process
+        dsn: '{{config "database_url"}}'
+
+pipelines:
+    publish-example:
+        trigger:
+            type: http
+            config:
+                path: /events/publish
+                method: POST
+        steps:
+            - name: publish
+              type: step.eventbus.publish
+              config:
+                subject: events.created
+                payload: '{{toJson .body}}'

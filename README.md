@@ -1,6 +1,6 @@
 # workflow-plugin-eventbus
 
-> ✅ **Verified** — used in production at [buymywishlist](https://github.com/GoCodeAlone/buymywishlist). This plugin has been validated end-to-end in a merged main-branch wfctl.yaml of an active GoCodeAlone project.
+> ✅ **Verified** — used in production at **buymywishlist**. This plugin has been validated end-to-end in a merged main-branch wfctl.yaml of an active GoCodeAlone project.
 
 A [workflow](https://github.com/GoCodeAlone/workflow) external plugin that provisions durable event-bus clusters and exposes typed pipeline steps for publish/consume operations.
 

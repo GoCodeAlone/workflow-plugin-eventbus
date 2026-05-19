@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [Unreleased]
 
 ### Added
 - Verified banner in README — plugin confirmed used in production at buymywishlist.

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- Verified banner in README — plugin confirmed used in production at buymywishlist.
+- CONTRIBUTING.md with local dev instructions and PR checklist.
+- `examples/minimal/config.yaml` — runnable `step.eventbus.publish` example using pgchannel provider without an external broker.
+
 ## v0.3.4 — 2026-05-13
 
 ### Fixed

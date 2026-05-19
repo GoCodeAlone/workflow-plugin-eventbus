@@ -1,5 +1,7 @@
 # workflow-plugin-eventbus
 
+> ✅ **Verified** — used in production at [buymywishlist](https://github.com/GoCodeAlone/buymywishlist). This plugin has been validated end-to-end in a merged main-branch wfctl.yaml of an active GoCodeAlone project.
+
 A [workflow](https://github.com/GoCodeAlone/workflow) external plugin that provisions durable event-bus clusters and exposes typed pipeline steps for publish/consume operations.
 
 > **v0.2.0 module-type rename:** `infra.eventbus*` → `eventbus.*`. The `infra.` prefix is reserved for IaC modules; eventbus modules are runtime modules. If you're upgrading from v0.1.0, see [MIGRATION.md](MIGRATION.md).

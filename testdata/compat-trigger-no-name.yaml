@@ -5,6 +5,7 @@
 # reject unknown YAML keys at the trigger-config level).
 
 name: eventbus-trigger-name-optional-compat
+allow_no_entry_points: true
 
 modules:
   - name: bmw-eventbus

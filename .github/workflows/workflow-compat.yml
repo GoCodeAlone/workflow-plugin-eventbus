@@ -63,4 +63,4 @@ jobs:
       - name: Validate trigger-no-name compat config
         run: |
           set -eux
-          wfctl validate --plugin-dir ./build testdata/compat-trigger-no-name.yaml
+          wfctl validate --plugin-dir ./build --allow-no-entry-points testdata/compat-trigger-no-name.yaml

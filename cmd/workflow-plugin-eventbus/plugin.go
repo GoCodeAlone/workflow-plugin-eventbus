@@ -38,7 +38,7 @@ var (
 func (p *eventbusPlugin) Manifest() sdk.PluginManifest {
 	return sdk.PluginManifest{
 		Name:        "workflow-plugin-eventbus",
-		Version:     version,
+		Version:     Version,
 		Author:      "GoCodeAlone",
 		Description: "Provisions durable event-bus clusters (NATS / Kafka / Kinesis) as IaC and exposes typed pipeline steps for publish / consume operations.",
 	}

@@ -6,8 +6,8 @@ package main
 import sdk "github.com/GoCodeAlone/workflow/plugin/external/sdk"
 
 // version is stamped at release time via goreleaser ldflags (-X main.version=<tag>).
-var version = "dev"
+var version = "0.0.0"
 
 func main() {
-	sdk.Serve(&eventbusPlugin{})
+	sdk.Serve(&eventbusPlugin{}, sdk.WithBuildVersion(sdk.ResolveBuildVersion(version)))
 }

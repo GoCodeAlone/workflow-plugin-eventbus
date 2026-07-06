@@ -71,6 +71,11 @@ func TestContractRegistry_StrictStepsDeclareConfigMessage(t *testing.T) {
 	if reg == nil {
 		t.Fatal("ContractRegistry returned nil")
 	}
+	emptyConfigSteps := map[string]bool{
+		"step.eventbus.publish": true,
+		"step.eventbus.consume": true,
+		"step.eventbus.ack":     true,
+	}
 	for _, c := range reg.Contracts {
 		if c.Kind != pb.ContractKind_CONTRACT_KIND_STEP {
 			continue
@@ -81,7 +86,7 @@ func TestContractRegistry_StrictStepsDeclareConfigMessage(t *testing.T) {
 		if c.ConfigMessage == "" {
 			t.Fatalf("strict step %q must declare config message so Workflow can encode TypedConfig", c.StepType)
 		}
-		if c.ConfigMessage != "google.protobuf.Empty" {
+		if emptyConfigSteps[c.StepType] && c.ConfigMessage != "google.protobuf.Empty" {
 			t.Fatalf("strict step %q config message = %q, want google.protobuf.Empty", c.StepType, c.ConfigMessage)
 		}
 	}

@@ -11,6 +11,7 @@ import (
 
 	eventbus "github.com/GoCodeAlone/workflow-plugin-eventbus"
 	eventbusv1 "github.com/GoCodeAlone/workflow-plugin-eventbus/gen"
+	pb "github.com/GoCodeAlone/workflow/plugin/external/proto"
 )
 
 // TestContractRegistry_FileDescriptorSetResolvesEveryContractMessage is the
@@ -60,6 +61,28 @@ func TestContractRegistry_FileDescriptorSetResolvesEveryContractMessage(t *testi
 	for name := range wantNames {
 		if _, err := types.FindMessageByName(protoreflect.FullName(name)); err != nil {
 			t.Errorf("FileDescriptorSet missing codec for contract message %q: %v", name, err)
+		}
+	}
+}
+
+func TestContractRegistry_StrictStepsDeclareConfigMessage(t *testing.T) {
+	p := &eventbusPlugin{}
+	reg := p.ContractRegistry()
+	if reg == nil {
+		t.Fatal("ContractRegistry returned nil")
+	}
+	for _, c := range reg.Contracts {
+		if c.Kind != pb.ContractKind_CONTRACT_KIND_STEP {
+			continue
+		}
+		if c.Mode != pb.ContractMode_CONTRACT_MODE_STRICT_PROTO {
+			continue
+		}
+		if c.ConfigMessage == "" {
+			t.Fatalf("strict step %q must declare config message so Workflow can encode TypedConfig", c.StepType)
+		}
+		if c.ConfigMessage != "google.protobuf.Empty" {
+			t.Fatalf("strict step %q config message = %q, want google.protobuf.Empty", c.StepType, c.ConfigMessage)
 		}
 	}
 }

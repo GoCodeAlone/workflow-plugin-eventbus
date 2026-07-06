@@ -23,6 +23,7 @@
             "kind": "step",
             "type": "step.eventbus.publish",
             "mode": "strict_proto",
+            "config": "google.protobuf.Empty",
             "input": "workflow.plugin.eventbus.v1.PublishRequest",
             "output": "workflow.plugin.eventbus.v1.PublishResponse"
         },
@@ -30,6 +31,7 @@
             "kind": "step",
             "type": "step.eventbus.consume",
             "mode": "strict_proto",
+            "config": "google.protobuf.Empty",
             "input": "workflow.plugin.eventbus.v1.ConsumeRequest",
             "output": "workflow.plugin.eventbus.v1.ConsumeResponse"
         },
@@ -37,6 +39,7 @@
             "kind": "step",
             "type": "step.eventbus.ack",
             "mode": "strict_proto",
+            "config": "google.protobuf.Empty",
             "input": "workflow.plugin.eventbus.v1.AckRequest",
             "output": "workflow.plugin.eventbus.v1.AckResponse"
         },

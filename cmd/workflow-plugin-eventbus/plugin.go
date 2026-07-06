@@ -261,6 +261,7 @@ func (p *eventbusPlugin) ContractRegistry() *pb.ContractRegistry {
 			{
 				Kind:          pb.ContractKind_CONTRACT_KIND_STEP,
 				StepType:      "step.eventbus.publish",
+				ConfigMessage: "google.protobuf.Empty",
 				InputMessage:  "workflow.plugin.eventbus.v1.PublishRequest",
 				OutputMessage: "workflow.plugin.eventbus.v1.PublishResponse",
 				Mode:          strict,
@@ -268,6 +269,7 @@ func (p *eventbusPlugin) ContractRegistry() *pb.ContractRegistry {
 			{
 				Kind:          pb.ContractKind_CONTRACT_KIND_STEP,
 				StepType:      "step.eventbus.consume",
+				ConfigMessage: "google.protobuf.Empty",
 				InputMessage:  "workflow.plugin.eventbus.v1.ConsumeRequest",
 				OutputMessage: "workflow.plugin.eventbus.v1.ConsumeResponse",
 				Mode:          strict,
@@ -275,6 +277,7 @@ func (p *eventbusPlugin) ContractRegistry() *pb.ContractRegistry {
 			{
 				Kind:          pb.ContractKind_CONTRACT_KIND_STEP,
 				StepType:      "step.eventbus.ack",
+				ConfigMessage: "google.protobuf.Empty",
 				InputMessage:  "workflow.plugin.eventbus.v1.AckRequest",
 				OutputMessage: "workflow.plugin.eventbus.v1.AckResponse",
 				Mode:          strict,
